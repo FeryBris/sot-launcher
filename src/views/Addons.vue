@@ -52,6 +52,20 @@ const groups = computed(() => {
           <AddonRow v-for="a in groups.optional" :key="a.name" :addon="a" />
         </div>
       </section>
+
+      <section v-if="store.installed?.customAddons.length" class="group">
+        <h2>Custom Addons</h2>
+        <p class="custom-hint">Installed outside the guild launcher — not synced or managed here.</p>
+        <div class="list">
+          <div v-for="c in store.installed.customAddons" :key="c.folder" class="custom-row">
+            <div class="custom-main">
+              <div class="name">{{ c.title }}<span class="version">v{{ c.version }}</span></div>
+              <div v-if="c.notes" class="notes">{{ c.notes }}</div>
+              <div class="folder">{{ c.folder }}</div>
+            </div>
+          </div>
+        </div>
+      </section>
     </template>
   </div>
 </template>
@@ -125,5 +139,45 @@ const groups = computed(() => {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.custom-hint {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin: 0 0 8px;
+}
+
+.custom-row {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+}
+
+.custom-main .name {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.custom-main .version {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-weight: 400;
+  margin-left: 6px;
+}
+
+.custom-main .notes {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 3px;
+  line-height: 1.4;
+}
+
+.custom-main .folder {
+  font-size: 10px;
+  color: var(--text-dim);
+  opacity: 0.7;
+  margin-top: 4px;
+  font-family: monospace;
 }
 </style>

@@ -46,10 +46,18 @@ export interface InstalledAddonState {
   filesPresent: boolean
 }
 
+export interface CustomAddon {
+  folder: string
+  title: string
+  version: string
+  notes: string
+}
+
 export interface InstalledState {
   addons: Record<string, InstalledAddonState>
   /** addon/wtf name -> sha256 currently on disk */
   wtfFiles: Record<string, string>
+  customAddons: CustomAddon[]
 }
 
 export interface SyncProgress {

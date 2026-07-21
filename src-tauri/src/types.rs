@@ -100,12 +100,24 @@ pub struct InstalledAddonState {
     pub files_present: bool,
 }
 
+/// An AddOns folder with no launcher marker, i.e. installed outside the
+/// launcher entirely. Read from its .toc file, purely informational.
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomAddon {
+    pub folder: String,
+    pub title: String,
+    pub version: String,
+    pub notes: String,
+}
+
 #[derive(Debug, Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct InstalledState {
     pub addons: std::collections::HashMap<String, InstalledAddonState>,
     /// wtf file name -> sha256 currently on disk (absent if the file doesn't exist)
     pub wtf_files: std::collections::HashMap<String, String>,
+    pub custom_addons: Vec<CustomAddon>,
 }
 
 #[derive(Debug, Clone, Serialize)]

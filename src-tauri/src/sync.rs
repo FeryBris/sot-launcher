@@ -1,7 +1,9 @@
-use crate::types::{AddonEntry, AddonMarker, InstalledAddonState, InstalledState, Manifest, SyncProgress, SyncResult, WtfEntry};
+use crate::types::{
+    AddonEntry, AddonMarker, CustomAddon, InstalledAddonState, InstalledState, Manifest, SyncProgress, SyncResult, WtfEntry,
+};
 use futures_util::StreamExt;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use tauri::{AppHandle, Emitter};
@@ -174,11 +176,120 @@ fn is_addon_wanted(addon: &AddonEntry, addon_enabled: &HashMap<String, bool>) ->
     }
 }
 
+/// Strips WoW's inline color escape codes (|cAARRGGBB...|r) so .toc titles
+/// read as plain text outside the game.
+fn strip_wow_color_codes(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '|' {
+            match chars.peek() {
+                Some('c') | Some('C') => {
+                    chars.next();
+                    for _ in 0..8 {
+                        if chars.peek().is_some() {
+                            chars.next();
+                        }
+                    }
+                    continue;
+                }
+                Some('r') | Some('R') => {
+                    chars.next();
+                    continue;
+                }
+                _ => {}
+            }
+        }
+        out.push(c);
+    }
+    out.trim().to_string()
+}
+
+/// Reads `## Title:`, `## Version:`, and `## Notes:` out of a .toc file's header comments.
+fn parse_toc(raw: &str) -> (Option<String>, Option<String>, Option<String>) {
+    let mut title = None;
+    let mut version = None;
+    let mut notes = None;
+    for line in raw.lines() {
+        let line = line.trim().trim_start_matches('\u{feff}');
+        let Some(rest) = line.strip_prefix("##") else { continue };
+        let rest = rest.trim();
+        if let Some(v) = rest.strip_prefix("Title:") {
+            title = Some(strip_wow_color_codes(v.trim()));
+        } else if let Some(v) = rest.strip_prefix("Version:") {
+            version = Some(v.trim().to_string());
+        } else if let Some(v) = rest.strip_prefix("Notes:") {
+            notes = Some(strip_wow_color_codes(v.trim()));
+        }
+    }
+    (title, version, notes)
+}
+
+/// Finds the .toc file that describes `dir` (preferring one matching the
+/// folder name, since a folder can carry more than one for different WoW
+/// client versions), falling back to whichever .toc is there.
+fn find_toc_file(dir: &Path, folder_name: &str) -> Option<PathBuf> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    let mut fallback = None;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case("toc")) != Some(true) {
+            continue;
+        }
+        if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+            if stem.eq_ignore_ascii_case(folder_name) {
+                return Some(path);
+            }
+        }
+        fallback.get_or_insert(path);
+    }
+    fallback
+}
+
+/// Lists every AddOns folder that isn't claimed by any launcher-managed
+/// addon marker, reading its .toc for a human-readable title/version.
+fn scan_custom_addons(addon_dir: &Path, claimed_folders: &HashSet<String>) -> Vec<CustomAddon> {
+    let mut result = Vec::new();
+    let Ok(entries) = std::fs::read_dir(addon_dir) else {
+        return result;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(folder) = path.file_name().and_then(|n| n.to_str()).map(str::to_string) else {
+            continue;
+        };
+        if claimed_folders.contains(&folder) {
+            continue;
+        }
+        let Some(toc_path) = find_toc_file(&path, &folder) else {
+            continue;
+        };
+        let Ok(raw) = std::fs::read_to_string(&toc_path) else {
+            continue;
+        };
+        let (title, version, notes) = parse_toc(&raw);
+        result.push(CustomAddon {
+            title: title.unwrap_or_else(|| folder.clone()),
+            version: version.unwrap_or_else(|| "unknown".to_string()),
+            notes: notes.unwrap_or_default(),
+            folder,
+        });
+    }
+    result.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+    result
+}
+
 /// Computes current on-disk state for everything in `manifest`, by scanning
 /// addon markers and hashing WTF files directly. No cache file involved.
 pub fn get_installed_state(game_path: &str, manifest: &Manifest) -> InstalledState {
     let addon_dir = PathBuf::from(game_path).join("Interface").join("AddOns");
     let addons = scan_installed_addons(&addon_dir);
+
+    let claimed_folders: HashSet<String> = addons.values().flat_map(|s| s.files.iter().cloned()).collect();
+    let custom_addons = scan_custom_addons(&addon_dir, &claimed_folders);
 
     let game_root = PathBuf::from(game_path);
     let mut wtf_files = HashMap::new();
@@ -190,7 +301,7 @@ pub fn get_installed_state(game_path: &str, manifest: &Manifest) -> InstalledSta
         }
     }
 
-    InstalledState { addons, wtf_files }
+    InstalledState { addons, wtf_files, custom_addons }
 }
 
 pub async fn sync_addons(
@@ -487,6 +598,40 @@ mod tests {
         let scanned = scan_installed_addons(&addon_dir);
         let state = scanned.get("BigAddon").expect("marker folder itself is untouched, so it's still found");
         assert!(!state.files_present, "missing secondary folder must be caught even though the marker itself is intact");
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn parse_toc_reads_title_version_notes_and_strips_color_codes() {
+        let raw = "## Title: |cff1784d1RCLootCouncil|r\n## Version: 3.0.0\n## Notes: Interface for running a Loot Council\n## Interface: 30300\n";
+        let (title, version, notes) = parse_toc(raw);
+        assert_eq!(title.as_deref(), Some("RCLootCouncil"));
+        assert_eq!(version.as_deref(), Some("3.0.0"));
+        assert_eq!(notes.as_deref(), Some("Interface for running a Loot Council"));
+    }
+
+    #[test]
+    fn scan_custom_addons_skips_managed_folders_and_reads_toc() {
+        let tmp = std::env::temp_dir().join(format!("sotgl-test-custom-{}", std::process::id()));
+        let addon_dir = tmp.join("AddOns");
+        std::fs::create_dir_all(addon_dir.join("ManagedAddon")).unwrap();
+        std::fs::create_dir_all(addon_dir.join("PenetratingAnub")).unwrap();
+        std::fs::write(
+            addon_dir.join("PenetratingAnub/PenetratingAnub.toc"),
+            "## Title: Penetrating Anub\n## Version: 1.4\n## Notes: Anub'arak boss mod\n",
+        )
+        .unwrap();
+
+        let mut claimed = HashSet::new();
+        claimed.insert("ManagedAddon".to_string());
+
+        let custom = scan_custom_addons(&addon_dir, &claimed);
+        assert_eq!(custom.len(), 1, "managed folder must be excluded, only the unmanaged one listed");
+        assert_eq!(custom[0].folder, "PenetratingAnub");
+        assert_eq!(custom[0].title, "Penetrating Anub");
+        assert_eq!(custom[0].version, "1.4");
+        assert_eq!(custom[0].notes, "Anub'arak boss mod");
 
         std::fs::remove_dir_all(&tmp).ok();
     }
