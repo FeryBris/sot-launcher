@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { deleteAddonNow, isAddonWanted, setAddonEnabled, store } from '../store'
+import { confirmDependentImpact, deleteAddonNow, isAddonWanted, setAddonEnabled, store } from '../store'
 import type { AddonEntry } from '../types'
 
 const props = defineProps<{ addon: AddonEntry }>()
@@ -34,10 +34,16 @@ const statusLabel: Record<typeof status.value, string> = {
 }
 
 function onToggle(e: Event) {
-  setAddonEnabled(props.addon.name, (e.target as HTMLInputElement).checked)
+  const target = e.target as HTMLInputElement
+  if (!target.checked && !confirmDependentImpact(props.addon.name, 'disable')) {
+    target.checked = wanted.value // revert: nothing reactive changed, so the DOM won't re-sync on its own
+    return
+  }
+  setAddonEnabled(props.addon.name, target.checked)
 }
 
 function onDelete() {
+  if (!confirmDependentImpact(props.addon.name, 'delete')) return
   if (confirm(`Delete ${props.addon.name} completely? This can't be undone — you'd need to sync it again to get it back.`)) {
     deleteAddonNow(props.addon.name)
   }

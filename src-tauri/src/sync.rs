@@ -207,11 +207,16 @@ fn strip_wow_color_codes(s: &str) -> String {
     out.trim().to_string()
 }
 
-/// Reads `## Title:`, `## Version:`, and `## Notes:` out of a .toc file's header comments.
-fn parse_toc(raw: &str) -> (Option<String>, Option<String>, Option<String>) {
+/// Reads `## Title:`, `## Version:`, `## Notes:`, and hard dependencies
+/// (`## Dependencies:` / the older `## RequiredDeps:` alias — both mean the
+/// same thing to WoW's addon loader) out of a .toc file's header comments.
+/// `## OptionalDeps:` is deliberately not read here: those don't break
+/// anything if missing, so they're not part of the "will this break X" check.
+fn parse_toc(raw: &str) -> (Option<String>, Option<String>, Option<String>, Vec<String>) {
     let mut title = None;
     let mut version = None;
     let mut notes = None;
+    let mut dependencies = Vec::new();
     for line in raw.lines() {
         let line = line.trim().trim_start_matches('\u{feff}');
         let Some(rest) = line.strip_prefix("##") else { continue };
@@ -222,9 +227,11 @@ fn parse_toc(raw: &str) -> (Option<String>, Option<String>, Option<String>) {
             version = Some(v.trim().to_string());
         } else if let Some(v) = rest.strip_prefix("Notes:") {
             notes = Some(strip_wow_color_codes(v.trim()));
+        } else if let Some(v) = rest.strip_prefix("Dependencies:").or_else(|| rest.strip_prefix("RequiredDeps:")) {
+            dependencies.extend(v.split(',').map(str::trim).filter(|d| !d.is_empty()).map(str::to_string));
         }
     }
-    (title, version, notes)
+    (title, version, notes, dependencies)
 }
 
 /// Finds the .toc file that describes `dir` (preferring one matching the
@@ -248,10 +255,11 @@ fn find_toc_file(dir: &Path, folder_name: &str) -> Option<PathBuf> {
     fallback
 }
 
-/// Reads the live `Version:`/`Notes:` out of whichever of an addon's owned
-/// folders (under `base_dir`) has a matching .toc, so displayed info always
-/// reflects what's actually on disk rather than what was last recorded.
-fn read_live_toc(base_dir: &Path, files: &[String]) -> (Option<String>, Option<String>) {
+/// Reads the live `Version:`/`Notes:`/`Dependencies:` out of whichever of an
+/// addon's owned folders (under `base_dir`) has a matching .toc, so displayed
+/// info always reflects what's actually on disk rather than what was last
+/// recorded. Returns None only if no .toc could be found at all.
+fn read_live_toc(base_dir: &Path, files: &[String]) -> Option<(Option<String>, Option<String>, Vec<String>)> {
     for f in files {
         let dir = base_dir.join(f);
         if !dir.is_dir() {
@@ -259,14 +267,12 @@ fn read_live_toc(base_dir: &Path, files: &[String]) -> (Option<String>, Option<S
         }
         if let Some(toc_path) = find_toc_file(&dir, f) {
             if let Ok(raw) = std::fs::read_to_string(&toc_path) {
-                let (_, version, notes) = parse_toc(&raw);
-                if version.is_some() || notes.is_some() {
-                    return (version, notes);
-                }
+                let (_, version, notes, dependencies) = parse_toc(&raw);
+                return Some((version, notes, dependencies));
             }
         }
     }
-    (None, None)
+    None
 }
 
 /// Lists every AddOns folder not claimed by any entry in `claimed_folders`,
@@ -293,7 +299,7 @@ fn scan_custom_addons(addon_dir: &Path, claimed_folders: &HashSet<String>) -> Ve
         let Ok(raw) = std::fs::read_to_string(&toc_path) else {
             continue;
         };
-        let (title, version, notes) = parse_toc(&raw);
+        let (title, version, notes, dependencies) = parse_toc(&raw);
         result.push(AddonStateEntry {
             name: title.unwrap_or_else(|| folder.clone()),
             kind: "custom".to_string(),
@@ -304,6 +310,7 @@ fn scan_custom_addons(addon_dir: &Path, claimed_folders: &HashSet<String>) -> Ve
             files: vec![folder],
             files_present: true,
             disabled: false,
+            dependencies,
         });
     }
     result.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
@@ -333,7 +340,11 @@ pub fn get_installed_state(game_path: &str, manifest: &Manifest) -> InstalledSta
         }
         let base = if entry.disabled { &disabled_dir } else { &addon_dir };
         let files_present = !entry.files.is_empty() && entry.files.iter().all(|f| base.join(f).exists());
-        let (live_version, live_notes) = if files_present { read_live_toc(base, &entry.files) } else { (None, None) };
+        let live = if files_present { read_live_toc(base, &entry.files) } else { None };
+        let (live_version, live_notes, live_deps) = match live {
+            Some((v, n, d)) => (v, n, Some(d)),
+            None => (None, None, None),
+        };
 
         let (kind, api_version, sha256) = if entry.kind == "custom" {
             (entry.kind, entry.api_version, entry.sha256)
@@ -355,6 +366,7 @@ pub fn get_installed_state(game_path: &str, manifest: &Manifest) -> InstalledSta
             files: entry.files,
             files_present,
             disabled: entry.disabled,
+            dependencies: live_deps.unwrap_or(entry.dependencies),
         });
     }
 
@@ -455,12 +467,15 @@ pub async fn sync_addons(
                 if prev.sha256.as_deref() == Some(addon.sha256.as_str())
                     && move_addon_files(&disabled_dir, &addon_dir, &prev.files).is_ok()
                 {
-                    let (live_version, live_notes) = read_live_toc(&addon_dir, &prev.files);
+                    let live = read_live_toc(&addon_dir, &prev.files);
                     let mut updated = prev.clone();
                     updated.disabled = false;
                     updated.files_present = true;
-                    updated.version = live_version.unwrap_or(updated.version);
-                    updated.notes = live_notes.unwrap_or(updated.notes);
+                    if let Some((live_version, live_notes, live_deps)) = live {
+                        updated.version = live_version.unwrap_or(updated.version);
+                        updated.notes = live_notes.unwrap_or(updated.notes);
+                        updated.dependencies = live_deps;
+                    }
                     by_name.insert(addon.name.clone(), updated);
                     result.updated.push(addon.name.clone());
                     emit_progress(app, &addon.name, "done", idx + 1, total, Some("enabled".to_string()));
@@ -528,7 +543,7 @@ pub async fn sync_addons(
         };
         let _ = std::fs::remove_file(&tmp_zip);
 
-        let (live_version, live_notes) = read_live_toc(&addon_dir, &extracted_files);
+        let (live_version, live_notes, live_deps) = read_live_toc(&addon_dir, &extracted_files).unwrap_or_default();
 
         by_name.insert(
             addon.name.clone(),
@@ -542,6 +557,7 @@ pub async fn sync_addons(
                 files: extracted_files,
                 files_present: true,
                 disabled: false,
+                dependencies: live_deps,
             },
         );
 
@@ -705,10 +721,25 @@ mod tests {
     #[test]
     fn parse_toc_reads_title_version_notes_and_strips_color_codes() {
         let raw = "## Title: |cff1784d1RCLootCouncil|r\n## Version: 3.0.0\n## Notes: Interface for running a Loot Council\n## Interface: 30300\n";
-        let (title, version, notes) = parse_toc(raw);
+        let (title, version, notes, deps) = parse_toc(raw);
         assert_eq!(title.as_deref(), Some("RCLootCouncil"));
         assert_eq!(version.as_deref(), Some("3.0.0"));
         assert_eq!(notes.as_deref(), Some("Interface for running a Loot Council"));
+        assert!(deps.is_empty());
+    }
+
+    #[test]
+    fn parse_toc_reads_dependencies_from_either_key_comma_separated() {
+        let (_, _, _, deps) = parse_toc("## Dependencies: Masque, LibStub\n");
+        assert_eq!(deps, vec!["Masque".to_string(), "LibStub".to_string()]);
+
+        // Older addons use RequiredDeps instead; WoW treats it identically.
+        let (_, _, _, deps) = parse_toc("## RequiredDeps: LibStub\n");
+        assert_eq!(deps, vec!["LibStub".to_string()]);
+
+        // OptionalDeps must never be picked up here - those don't break anything if missing.
+        let (_, _, _, deps) = parse_toc("## OptionalDeps: Skada\n");
+        assert!(deps.is_empty());
     }
 
     #[test]
@@ -775,6 +806,7 @@ mod tests {
             files: vec!["AddonA".to_string()],
             files_present: true,
             disabled: false,
+            dependencies: vec![],
         }];
         save_addons_state(&addon_dir, &entries).unwrap();
 
@@ -812,6 +844,7 @@ mod tests {
             files: vec!["AddonA".to_string()],
             files_present: true,
             disabled: false,
+            dependencies: vec![],
         }];
         save_addons_state(&addon_dir, &entries).unwrap();
 
@@ -851,6 +884,7 @@ mod tests {
             files: vec!["PenetratingAnub".to_string()],
             files_present: true,
             disabled: false,
+            dependencies: vec![],
         }];
         save_addons_state(&addon_dir, &entries).unwrap();
 

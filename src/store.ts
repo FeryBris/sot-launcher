@@ -111,6 +111,34 @@ export function setAddonEnabled(name: string, enabled: boolean) {
   store.addonEnabled[name] = enabled
 }
 
+/** Names of other currently-enabled tracked addons that require `name` to function. */
+export function getDependents(name: string): string[] {
+  const target = store.installed?.addons[name]
+  if (!target) return []
+  const targetFolders = new Set(target.files.map((f) => f.toLowerCase()))
+  const dependents: string[] = []
+  for (const entry of Object.values(store.installed?.addons ?? {})) {
+    if (entry.name === name || entry.disabled) continue
+    if (entry.dependencies.some((dep) => targetFolders.has(dep.toLowerCase()))) {
+      dependents.push(entry.name)
+    }
+  }
+  return dependents
+}
+
+/** Warns if disabling/deleting `name` would break other installed addons that
+ *  depend on it. Returns true if there's nothing to warn about or the user
+ *  confirmed anyway; false if they backed out. */
+export function confirmDependentImpact(name: string, action: 'disable' | 'delete'): boolean {
+  const dependents = getDependents(name)
+  if (dependents.length === 0) return true
+  const verb = action === 'delete' ? 'Deleting' : 'Disabling'
+  const plural = dependents.length === 1 ? 'requires' : 'require'
+  return confirm(
+    `${dependents.join(', ')} ${plural} "${name}" to work.\n\n${verb} it will likely break ${dependents.length === 1 ? 'that addon' : 'those addons'} in-game.\n\nContinue anyway?`,
+  )
+}
+
 /** Immediate disable/enable for one addon (managed or custom) - moves its folder
  *  to/from Interface/.DisabledAddons right away, no Sync click needed. */
 export async function setAddonDisabledNow(name: string, disabled: boolean) {

@@ -109,6 +109,11 @@ pub struct AddonStateEntry {
     /// instead of Interface/AddOns.
     #[serde(default)]
     pub disabled: bool,
+    /// Folder names of other addons this one requires to function, read from
+    /// its .toc `## Dependencies:`/`## RequiredDeps:` line. Used to warn
+    /// before disabling/deleting something another installed addon needs.
+    #[serde(default)]
+    pub dependencies: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

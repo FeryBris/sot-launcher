@@ -52,6 +52,8 @@ export interface AddonStateEntry {
   files: string[]
   filesPresent: boolean
   disabled: boolean
+  /** Folder names of other addons this one requires, read from its .toc. */
+  dependencies: string[]
 }
 
 export interface InstalledState {

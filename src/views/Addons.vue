@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { deleteAddonNow, refreshManifest, setAddonDisabledNow, store } from '../store'
+import { confirmDependentImpact, deleteAddonNow, refreshManifest, setAddonDisabledNow, store } from '../store'
 import AddonRow from '../components/AddonRow.vue'
 
 const groups = computed(() => {
@@ -19,9 +19,16 @@ const customAddons = computed(() =>
 )
 
 function onDeleteCustom(name: string) {
+  if (!confirmDependentImpact(name, 'delete')) return
   if (confirm(`Delete ${name} completely? This can't be undone.`)) {
     deleteAddonNow(name)
   }
+}
+
+function onToggleCustom(name: string, currentlyDisabled: boolean) {
+  const disabling = !currentlyDisabled
+  if (disabling && !confirmDependentImpact(name, 'disable')) return
+  setAddonDisabledNow(name, disabling)
 }
 </script>
 
@@ -79,7 +86,7 @@ function onDeleteCustom(name: string) {
               <div class="folder">{{ c.files[0] }}</div>
             </div>
             <div class="custom-actions">
-              <button class="action-btn" @click="setAddonDisabledNow(c.name, !c.disabled)">
+              <button class="action-btn" @click="onToggleCustom(c.name, c.disabled)">
                 {{ c.disabled ? 'Enable' : 'Disable' }}
               </button>
               <button class="delete-btn" title="Delete completely" @click="onDeleteCustom(c.name)">✕</button>
