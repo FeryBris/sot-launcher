@@ -22,7 +22,7 @@ const groups = computed(() => {
 
     <div v-if="store.loadingManifest" class="empty">Loading manifest...</div>
     <div v-else-if="store.manifestError" class="empty error">
-      Couldn't reach the guild server. Check the API URL in Settings.
+      Couldn't reach the guild server: {{ store.manifestError }}
     </div>
     <div v-else-if="!store.manifest" class="empty">No manifest loaded.</div>
 

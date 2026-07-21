@@ -17,7 +17,7 @@ import heroImg from '../assets/hero.png';
 
       <div v-if="store.loadingManifest" class="empty">Loading...</div>
       <div v-else-if="store.manifestError" class="empty error">
-        Couldn't reach the guild server. Check the API URL in Settings.
+        Couldn't reach the guild server: {{ store.manifestError }}
       </div>
       <div v-else-if="!store.manifest?.news.length" class="empty">No news yet.</div>
 

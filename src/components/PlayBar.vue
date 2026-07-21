@@ -17,7 +17,7 @@ function statusLabel() {
     return `${store.syncProgress.stage} ${store.syncProgress.item} (${store.syncProgress.current}/${store.syncProgress.total})`
   }
   if (store.syncing) return 'Syncing...'
-  if (store.manifestError) return 'Could not reach the guild server'
+  if (store.manifestError) return `Guild server error: ${store.manifestError}`
   if (pendingCount.value > 0) return `${pendingCount.value} item(s) need updating`
   return 'Up to date'
 }
