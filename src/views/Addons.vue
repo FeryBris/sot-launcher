@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { refreshManifest, store } from '../store'
+import { deleteAddonNow, refreshManifest, setAddonDisabledNow, store } from '../store'
 import AddonRow from '../components/AddonRow.vue'
 
 const groups = computed(() => {
@@ -17,6 +17,12 @@ const customAddons = computed(() =>
     .filter((a) => a.type === 'custom')
     .sort((a, b) => a.name.localeCompare(b.name)),
 )
+
+function onDeleteCustom(name: string) {
+  if (confirm(`Delete ${name} completely? This can't be undone.`)) {
+    deleteAddonNow(name)
+  }
+}
 </script>
 
 <template>
@@ -28,7 +34,7 @@ const customAddons = computed(() =>
           {{ store.loadingManifest ? 'Refreshing...' : 'Refresh' }}
         </button>
       </div>
-      <p>Mandatory addons always sync. Uncheck anything else to leave it out — unchecking something already installed removes it from your AddOns folder on the next sync.</p>
+      <p>Mandatory addons always sync. Uncheck anything else to leave it out — unchecking something already installed moves it to Interface/.DisabledAddons on the next sync (recoverable by re-checking, or use the ✕ to delete it for good).</p>
     </div>
 
     <div v-if="store.loadingManifest" class="empty">Loading manifest...</div>
@@ -63,11 +69,20 @@ const customAddons = computed(() =>
         <h2>Custom Addons</h2>
         <p class="custom-hint">Installed outside the guild launcher — not synced or managed here.</p>
         <div class="list">
-          <div v-for="c in customAddons" :key="c.files[0]" class="custom-row">
+          <div v-for="c in customAddons" :key="c.files[0]" class="custom-row" :class="{ dim: c.disabled }">
             <div class="custom-main">
-              <div class="name">{{ c.name }}<span class="version">v{{ c.version }}</span></div>
+              <div class="name">
+                {{ c.name }}<span class="version">v{{ c.version }}</span>
+                <span v-if="c.disabled" class="badge off">Off</span>
+              </div>
               <div v-if="c.notes" class="notes">{{ c.notes }}</div>
               <div class="folder">{{ c.files[0] }}</div>
+            </div>
+            <div class="custom-actions">
+              <button class="action-btn" @click="setAddonDisabledNow(c.name, !c.disabled)">
+                {{ c.disabled ? 'Enable' : 'Disable' }}
+              </button>
+              <button class="delete-btn" title="Delete completely" @click="onDeleteCustom(c.name)">✕</button>
             </div>
           </div>
         </div>
@@ -154,15 +169,75 @@ const customAddons = computed(() =>
 }
 
 .custom-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 10px 14px;
 }
 
+.custom-row.dim {
+  opacity: 0.6;
+}
+
+.custom-main {
+  min-width: 0;
+}
+
 .custom-main .name {
   font-size: 13px;
   font-weight: 500;
+}
+
+.custom-main .badge {
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background: var(--bg-elevated);
+  color: var(--text-dim);
+  margin-left: 8px;
+}
+
+.custom-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.action-btn {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius);
+  padding: 6px 12px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.action-btn:hover {
+  border-color: var(--accent-dim);
+}
+
+.delete-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: var(--radius);
+  width: 22px;
+  height: 22px;
+  font-size: 11px;
+  line-height: 1;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.delete-btn:hover {
+  border-color: var(--danger);
+  color: var(--danger);
 }
 
 .custom-main .version {

@@ -98,13 +98,17 @@ pub struct AddonStateEntry {
     pub sha256: Option<String>,
     #[serde(default)]
     pub notes: String,
-    /// Top-level folder(s) this addon owns under Interface/AddOns. Empty for
-    /// custom addons, since the launcher doesn't manage or remove those.
+    /// Top-level folder(s) this addon owns, under Interface/AddOns when
+    /// enabled or Interface/.DisabledAddons when disabled.
     #[serde(default)]
     pub files: Vec<String>,
-    /// False if any folder in `files` is actually missing.
+    /// False if any folder in `files` is actually missing from its expected location.
     #[serde(default)]
     pub files_present: bool,
+    /// True if this addon's folders currently live in Interface/.DisabledAddons
+    /// instead of Interface/AddOns.
+    #[serde(default)]
+    pub disabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { isAddonWanted, setAddonEnabled, store } from '../store'
+import { deleteAddonNow, isAddonWanted, setAddonEnabled, store } from '../store'
 import type { AddonEntry } from '../types'
 
 const props = defineProps<{ addon: AddonEntry }>()
@@ -29,12 +29,18 @@ const installedVersionMismatch = computed(
 const statusLabel: Record<typeof status.value, string> = {
   synced: 'Synced',
   pending: 'Pending',
-  removing: 'Will remove',
+  removing: 'Will disable',
   off: 'Off',
 }
 
 function onToggle(e: Event) {
   setAddonEnabled(props.addon.name, (e.target as HTMLInputElement).checked)
+}
+
+function onDelete() {
+  if (confirm(`Delete ${props.addon.name} completely? This can't be undone — you'd need to sync it again to get it back.`)) {
+    deleteAddonNow(props.addon.name)
+  }
 }
 </script>
 
@@ -51,7 +57,10 @@ function onToggle(e: Event) {
         </div>
       </div>
     </div>
-    <span class="badge" :class="status">{{ statusLabel[status] }}</span>
+    <div class="row-actions">
+      <span class="badge" :class="status">{{ statusLabel[status] }}</span>
+      <button v-if="installed" class="delete-btn" title="Delete completely" @click.stop.prevent="onDelete">✕</button>
+    </div>
   </label>
 </template>
 
@@ -93,6 +102,13 @@ function onToggle(e: Event) {
   color: var(--accent-strong);
 }
 
+.row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .badge {
   font-size: 10px;
   padding: 3px 8px;
@@ -100,6 +116,23 @@ function onToggle(e: Event) {
   background: var(--bg-elevated);
   color: var(--text-dim);
   flex-shrink: 0;
+}
+
+.delete-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: var(--radius);
+  width: 22px;
+  height: 22px;
+  font-size: 11px;
+  line-height: 1;
+  padding: 0;
+}
+
+.delete-btn:hover {
+  border-color: var(--danger);
+  color: var(--danger);
 }
 
 .badge.synced {

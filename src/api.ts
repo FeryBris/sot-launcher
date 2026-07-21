@@ -48,6 +48,14 @@ export function getInstalledState(manifest: Manifest): Promise<InstalledState> {
   return invoke('get_installed_state', { manifest })
 }
 
+export function setAddonDisabled(manifest: Manifest, name: string, disabled: boolean): Promise<InstalledState> {
+  return invoke('set_addon_disabled', { manifest, name, disabled })
+}
+
+export function deleteAddon(manifest: Manifest, name: string): Promise<InstalledState> {
+  return invoke('delete_addon', { manifest, name })
+}
+
 export function runSync(manifest: Manifest, addonEnabled: Record<string, boolean>): Promise<CombinedSyncResult> {
   return invoke('run_sync', { manifest, addonEnabled })
 }

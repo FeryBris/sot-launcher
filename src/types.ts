@@ -51,6 +51,7 @@ export interface AddonStateEntry {
   notes: string
   files: string[]
   filesPresent: boolean
+  disabled: boolean
 }
 
 export interface InstalledState {

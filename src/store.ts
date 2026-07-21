@@ -111,6 +111,27 @@ export function setAddonEnabled(name: string, enabled: boolean) {
   store.addonEnabled[name] = enabled
 }
 
+/** Immediate disable/enable for one addon (managed or custom) - moves its folder
+ *  to/from Interface/.DisabledAddons right away, no Sync click needed. */
+export async function setAddonDisabledNow(name: string, disabled: boolean) {
+  if (!store.manifest) return
+  try {
+    store.installed = await api.setAddonDisabled(store.manifest, name, disabled)
+  } catch (e) {
+    store.syncError = String(e)
+  }
+}
+
+/** Immediate, permanent delete for one addon (managed or custom). */
+export async function deleteAddonNow(name: string) {
+  if (!store.manifest) return
+  try {
+    store.installed = await api.deleteAddon(store.manifest, name)
+  } catch (e) {
+    store.syncError = String(e)
+  }
+}
+
 export async function syncNow() {
   if (!store.manifest) return
   store.syncing = true
@@ -133,10 +154,10 @@ export function pendingCount(): number {
   for (const addon of store.manifest.addons) {
     const installed = store.installed.addons[addon.name]
     if (isAddonWanted(addon)) {
-      if (!installed || !installed.filesPresent || installed.sha256 !== addon.sha256) {
+      if (!installed || installed.disabled || !installed.filesPresent || installed.sha256 !== addon.sha256) {
         count++
       }
-    } else if (installed) {
+    } else if (installed && !installed.disabled) {
       count++
     }
   }

@@ -34,6 +34,8 @@ pub fn run() {
       commands::pick_game_folder,
       commands::fetch_manifest,
       commands::get_installed_state,
+      commands::set_addon_disabled,
+      commands::delete_addon,
       commands::run_sync,
       commands::launch_game,
     ])

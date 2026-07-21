@@ -123,6 +123,36 @@ pub fn get_installed_state(app: AppHandle, manifest: Manifest) -> Result<Install
     Ok(sync::get_installed_state(&game_path, &manifest))
 }
 
+/// Immediate disable/enable for a single addon (managed or custom). Managed
+/// addons normally go through the batched Sync flow via addon_enabled, but
+/// custom addons have no manifest entry to sync against, so this is the only
+/// mechanism available for them.
+#[tauri::command]
+pub fn set_addon_disabled(app: AppHandle, manifest: Manifest, name: String, disabled: bool) -> Result<InstalledState, String> {
+    let s = settings::load_settings(&app)?;
+    let game_path = s.game_path.ok_or_else(|| "no game folder configured".to_string())?;
+    sync::set_addon_disabled(&game_path, &name, disabled)?;
+    Ok(sync::get_installed_state(&game_path, &manifest))
+}
+
+/// Permanently deletes a tracked addon (managed or custom) right away,
+/// without waiting for a sync. For managed addons this also unchecks it so
+/// it doesn't silently come back on the next sync.
+#[tauri::command]
+pub fn delete_addon(app: AppHandle, manifest: Manifest, name: String) -> Result<InstalledState, String> {
+    let mut s = settings::load_settings(&app)?;
+    let game_path = s.game_path.clone().ok_or_else(|| "no game folder configured".to_string())?;
+
+    if let Some(removed) = sync::delete_addon(&game_path, &name)? {
+        if removed.kind != "custom" {
+            s.addon_enabled.insert(name, false);
+            settings::save_settings(&app, &s)?;
+        }
+    }
+
+    Ok(sync::get_installed_state(&game_path, &manifest))
+}
+
 #[tauri::command]
 pub async fn run_sync(
     app: AppHandle,
