@@ -10,6 +10,16 @@ use tauri_plugin_deep_link::DeepLinkExt;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
+    // Must be registered first: on Windows/Linux a deep link relaunches the
+    // app as a brand new process, so without this every sot-launcher://
+    // click would open a second window instead of reaching the running one.
+    // The "deep-link" cargo feature makes this automatically forward the
+    // second launch's URL into the deep-link plugin below.
+    .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+      if let Some(window) = app.get_webview_window("main") {
+        let _ = window.set_focus();
+      }
+    }))
     .manage(AppState::default())
     .setup(|app| {
       if cfg!(debug_assertions) {
