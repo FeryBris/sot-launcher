@@ -13,14 +13,20 @@
   --radius: 8px;
 
   color-scheme: dark;
-  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-family:
+    'Segoe UI',
+    system-ui,
+    -apple-system,
+    sans-serif;
 }
 
 * {
   box-sizing: border-box;
 }
 
-html, body, #app {
+html,
+body,
+#app {
   height: 100%;
   margin: 0;
 }
@@ -28,7 +34,7 @@ html, body, #app {
 body {
   background:
     linear-gradient(180deg, rgba(14, 17, 22, 0.88), rgba(14, 17, 22, 0.94)),
-    url('./assets/background_arthas.webp') no-repeat center center fixed;
+    url('./assets/background_arthas.webp') no-repeat top left fixed;
   background-size: cover;
   color: var(--text);
   font-size: 14px;
@@ -41,7 +47,8 @@ button {
   cursor: pointer;
 }
 
-input, select {
+input,
+select {
   font-family: inherit;
 }
 
