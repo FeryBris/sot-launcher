@@ -8,15 +8,23 @@ const props = defineProps<{ addon: AddonEntry }>()
 const locked = computed(() => props.addon.category === 'mandatory')
 const wanted = computed(() => isAddonWanted(props.addon))
 
+const installed = computed(() => store.installed?.addons[props.addon.name])
+
+// sha256 is what actually decides whether a sync would re-download this addon
+// (see sync_addons in Rust); the .toc "version" is separate, author-controlled
+// text that doesn't always get bumped, so it's shown but not used for this check.
 const status = computed<'synced' | 'pending' | 'removing' | 'off'>(() => {
-  const installed = store.installed?.addons[props.addon.name]
   if (wanted.value) {
-    const upToDate =
-      !!installed && installed.filesPresent && installed.version === props.addon.version && installed.sha256 === props.addon.sha256
+    const upToDate = !!installed.value && installed.value.filesPresent && installed.value.sha256 === props.addon.sha256
     return upToDate ? 'synced' : 'pending'
   }
-  return installed ? 'removing' : 'off'
+  return installed.value ? 'removing' : 'off'
 })
+
+// Only worth calling out when they actually disagree — most addons keep these in sync.
+const installedVersionMismatch = computed(
+  () => !!installed.value && installed.value.version !== props.addon.version,
+)
 
 const statusLabel: Record<typeof status.value, string> = {
   synced: 'Synced',
@@ -36,7 +44,11 @@ function onToggle(e: Event) {
       <input type="checkbox" :checked="wanted" :disabled="locked" @change="onToggle" />
       <div>
         <div class="name">{{ addon.name }}</div>
-        <div class="meta">v{{ addon.version }}<span v-if="addon.changelog"> — {{ addon.changelog }}</span></div>
+        <div class="meta">
+          v{{ addon.version }}
+          <span v-if="installedVersionMismatch" class="version-diff">(installed: v{{ installed?.version }})</span>
+          <span v-if="addon.changelog"> — {{ addon.changelog }}</span>
+        </div>
       </div>
     </div>
     <span class="badge" :class="status">{{ statusLabel[status] }}</span>
@@ -75,6 +87,10 @@ function onToggle(e: Event) {
   font-size: 11px;
   color: var(--text-dim);
   margin-top: 2px;
+}
+
+.version-diff {
+  color: var(--accent-strong);
 }
 
 .badge {

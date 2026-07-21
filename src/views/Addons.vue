@@ -11,6 +11,12 @@ const groups = computed(() => {
     optional: addons.filter((a) => a.category === 'optional'),
   }
 })
+
+const customAddons = computed(() =>
+  Object.values(store.installed?.addons ?? {})
+    .filter((a) => a.type === 'custom')
+    .sort((a, b) => a.name.localeCompare(b.name)),
+)
 </script>
 
 <template>
@@ -53,15 +59,15 @@ const groups = computed(() => {
         </div>
       </section>
 
-      <section v-if="store.installed?.customAddons.length" class="group">
+      <section v-if="customAddons.length" class="group">
         <h2>Custom Addons</h2>
         <p class="custom-hint">Installed outside the guild launcher — not synced or managed here.</p>
         <div class="list">
-          <div v-for="c in store.installed.customAddons" :key="c.folder" class="custom-row">
+          <div v-for="c in customAddons" :key="c.files[0]" class="custom-row">
             <div class="custom-main">
-              <div class="name">{{ c.title }}<span class="version">v{{ c.version }}</span></div>
+              <div class="name">{{ c.name }}<span class="version">v{{ c.version }}</span></div>
               <div v-if="c.notes" class="notes">{{ c.notes }}</div>
-              <div class="folder">{{ c.folder }}</div>
+              <div class="folder">{{ c.files[0] }}</div>
             </div>
           </div>
         </div>

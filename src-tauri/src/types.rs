@@ -74,50 +74,52 @@ fn default_api_base_url() -> String {
     "https://sot.sk/api/launcher".to_string()
 }
 
-/// Written as `.sotlauncher.json` inside an addon's own folder at install
-/// time. Installed state is derived by scanning the game folder for these
-/// markers rather than trusting a separate cache, so it stays correct even
-/// if files are deleted by hand or the WoW folder is moved to a new machine.
+/// One entry in `Interface/AddOns/.sotlauncher.json` — the single file that
+/// records everything the launcher knows about every addon folder, managed
+/// or not. Rewritten in full on every sync and every state refresh.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct AddonMarker {
+pub struct AddonStateEntry {
     pub name: String,
+    /// "mandatory" | "recommended" | "optional" | "custom"
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// Version read fresh from the addon's own .toc file on disk — what's
+    /// actually installed right now, independent of anything we recorded.
     pub version: String,
-    pub sha256: String,
-    /// Top-level file/folder names this addon's zip wrote under Interface/AddOns,
-    /// so a later removal only ever deletes what this addon actually created.
+    /// Version the guild manifest currently declares. Absent for custom addons.
+    #[serde(default)]
+    pub api_version: Option<String>,
+    /// sha256 the manifest declared when this was installed. Absent for
+    /// custom addons. This, not `version`, is what decides whether a sync
+    /// re-downloads something — addon authors don't always bump their .toc
+    /// Version field when they ship a fix, so trusting the hash is safer.
+    #[serde(default)]
+    pub sha256: Option<String>,
+    #[serde(default)]
+    pub notes: String,
+    /// Top-level folder(s) this addon owns under Interface/AddOns. Empty for
+    /// custom addons, since the launcher doesn't manage or remove those.
     #[serde(default)]
     pub files: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct InstalledAddonState {
-    pub version: String,
-    pub sha256: String,
-    pub files: Vec<String>,
-    /// False if any file/folder the marker says this addon owns is actually missing.
+    /// False if any folder in `files` is actually missing.
+    #[serde(default)]
     pub files_present: bool,
 }
 
-/// An AddOns folder with no launcher marker, i.e. installed outside the
-/// launcher entirely. Read from its .toc file, purely informational.
-#[derive(Debug, Clone, Serialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct CustomAddon {
-    pub folder: String,
-    pub title: String,
-    pub version: String,
-    pub notes: String,
+pub struct AddonsStateFile {
+    #[serde(default)]
+    pub addons: Vec<AddonStateEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct InstalledState {
-    pub addons: std::collections::HashMap<String, InstalledAddonState>,
+    pub addons: std::collections::HashMap<String, AddonStateEntry>,
     /// wtf file name -> sha256 currently on disk (absent if the file doesn't exist)
     pub wtf_files: std::collections::HashMap<String, String>,
-    pub custom_addons: Vec<CustomAddon>,
 }
 
 #[derive(Debug, Clone, Serialize)]

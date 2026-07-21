@@ -39,25 +39,24 @@ export interface Settings {
   addonEnabled: Record<string, boolean>
 }
 
-export interface InstalledAddonState {
+export interface AddonStateEntry {
+  name: string
+  /** 'mandatory' | 'recommended' | 'optional' | 'custom' */
+  type: AddonCategory | 'custom'
+  /** version read live from the addon's own .toc file on disk */
   version: string
-  sha256: string
+  /** version the guild manifest currently declares; absent for custom addons */
+  apiVersion: string | null
+  sha256: string | null
+  notes: string
   files: string[]
   filesPresent: boolean
 }
 
-export interface CustomAddon {
-  folder: string
-  title: string
-  version: string
-  notes: string
-}
-
 export interface InstalledState {
-  addons: Record<string, InstalledAddonState>
+  addons: Record<string, AddonStateEntry>
   /** addon/wtf name -> sha256 currently on disk */
   wtfFiles: Record<string, string>
-  customAddons: CustomAddon[]
 }
 
 export interface SyncProgress {

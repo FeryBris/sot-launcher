@@ -133,7 +133,7 @@ export function pendingCount(): number {
   for (const addon of store.manifest.addons) {
     const installed = store.installed.addons[addon.name]
     if (isAddonWanted(addon)) {
-      if (!installed || !installed.filesPresent || installed.version !== addon.version || installed.sha256 !== addon.sha256) {
+      if (!installed || !installed.filesPresent || installed.sha256 !== addon.sha256) {
         count++
       }
     } else if (installed) {
