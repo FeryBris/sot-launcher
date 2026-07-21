@@ -26,7 +26,10 @@ html, body, #app {
 }
 
 body {
-  background: var(--bg);
+  background:
+    linear-gradient(180deg, rgba(14, 17, 22, 0.88), rgba(14, 17, 22, 0.94)),
+    url('./assets/background_arthas.webp') no-repeat center center fixed;
+  background-size: cover;
   color: var(--text);
   font-size: 14px;
   overflow: hidden;
