@@ -109,7 +109,11 @@ pub async fn fetch_manifest(
     if !resp.status().is_success() {
         return Err(format!("HTTP {} while fetching manifest", resp.status()));
     }
-    resp.json::<Manifest>().await.map_err(|e| e.to_string())
+    let body = resp.text().await.map_err(|e| e.to_string())?;
+    serde_json::from_str::<Manifest>(&body).map_err(|e| {
+        let snippet: String = body.chars().take(300).collect();
+        format!("couldn't parse manifest response ({e}). Server returned: {snippet}")
+    })
 }
 
 #[tauri::command]
