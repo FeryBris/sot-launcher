@@ -116,7 +116,7 @@ function statusLabel() {
 
 .play-btn {
   background: linear-gradient(135deg, var(--accent-strong), var(--accent));
-  color: #1a1408;
+  color: #062028;
   border: none;
   border-radius: var(--radius);
   padding: 10px 28px;

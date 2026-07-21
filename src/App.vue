@@ -146,7 +146,7 @@ onMounted(async () => {
   height: 30px;
   border-radius: 6px;
   background: linear-gradient(135deg, var(--accent), var(--accent-dim));
-  color: #1a1408;
+  color: #062028;
   font-weight: 700;
   font-size: 12px;
   display: flex;
@@ -215,7 +215,7 @@ onMounted(async () => {
 
 .update-btn {
   background: var(--accent);
-  color: #1a1408;
+  color: #062028;
   border: none;
   border-radius: 6px;
   padding: 6px 8px;
