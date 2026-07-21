@@ -1,10 +1,13 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { confirmDelete, confirmDisable, deleteAddonNow, refreshManifest, setAddonDisabledNow, store } from '../store'
 import AddonRow from '../components/AddonRow.vue'
 
+const search = ref('')
+
 const groups = computed(() => {
-  const addons = store.manifest?.addons ?? []
+  const query = search.value.trim().toLowerCase()
+  const addons = (store.manifest?.addons ?? []).filter((a) => a.name.toLowerCase().includes(query))
   return {
     mandatory: addons.filter((a) => a.category === 'mandatory'),
     recommended: addons.filter((a) => a.category === 'recommended'),
@@ -12,10 +15,15 @@ const groups = computed(() => {
   }
 })
 
-const customAddons = computed(() =>
-  Object.values(store.installed?.addons ?? {})
-    .filter((a) => a.type === 'custom')
-    .sort((a, b) => a.name.localeCompare(b.name)),
+const customAddons = computed(() => {
+  const query = search.value.trim().toLowerCase()
+  return Object.values(store.installed?.addons ?? {})
+    .filter((a) => a.type === 'custom' && a.name.toLowerCase().includes(query))
+    .sort((a, b) => a.name.localeCompare(b.name))
+})
+
+const hasResults = computed(
+  () => groups.value.mandatory.length + groups.value.recommended.length + groups.value.optional.length + customAddons.value.length > 0,
 )
 
 async function onDeleteCustom(name: string) {
@@ -44,6 +52,7 @@ async function onToggleCustom(name: string, currentlyDisabled: boolean) {
         </button>
       </div>
       <p>Mandatory addons always sync. Uncheck anything else to leave it out — unchecking something already installed moves it to Interface/.DisabledAddons on the next sync (recoverable by re-checking, or use the ✕ to delete it for good).</p>
+      <input v-if="store.manifest" v-model="search" type="text" class="search-input" placeholder="Search addons..." />
     </div>
 
     <div v-if="store.loadingManifest" class="empty">Loading manifest...</div>
@@ -51,6 +60,7 @@ async function onToggleCustom(name: string, currentlyDisabled: boolean) {
       Couldn't reach the guild server: {{ store.manifestError }}
     </div>
     <div v-else-if="!store.manifest" class="empty">No manifest loaded.</div>
+    <div v-else-if="!hasResults" class="empty">No addons match "{{ search }}".</div>
 
     <template v-else>
       <section v-if="groups.mandatory.length" class="group">
@@ -122,6 +132,22 @@ async function onToggleCustom(name: string, currentlyDisabled: boolean) {
   font-size: 12px;
   color: var(--text-dim);
   margin: 0 0 24px;
+}
+
+.search-input {
+  width: 100%;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  color: var(--text);
+  font-size: 13px;
+  margin-bottom: 20px;
+}
+
+.search-input:focus {
+  outline: none;
+  border-color: var(--accent-dim);
 }
 
 .refresh-btn {
