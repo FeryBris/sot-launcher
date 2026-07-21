@@ -1,11 +1,13 @@
-use crate::types::{AddonEntry, LockEntry, LockFile, SyncProgress, SyncResult, WtfEntry};
+use crate::types::{AddonEntry, AddonMarker, InstalledAddonState, InstalledState, Manifest, SyncProgress, SyncResult, WtfEntry};
 use futures_util::StreamExt;
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use tauri::{AppHandle, Emitter};
 
 const EVENT: &str = "sync-progress";
+const MARKER_FILENAME: &str = ".sotlauncher.json";
 
 fn emit_progress(
     app: &AppHandle,
@@ -118,7 +120,53 @@ fn remove_addon_files(addon_dir: &Path, files: &[String]) {
     }
 }
 
-fn is_addon_wanted(addon: &AddonEntry, addon_enabled: &std::collections::HashMap<String, bool>) -> bool {
+/// Writes the marker inside the first directory the zip created (or, in the
+/// rare case a zip has no top-level directory, as a hidden file at the addon
+/// root) so it travels naturally with the addon's own files.
+fn write_addon_marker(addon_dir: &Path, marker: &AddonMarker) -> Result<(), String> {
+    let home = marker.files.iter().find(|f| addon_dir.join(f).is_dir());
+    let marker_path = match home {
+        Some(f) => addon_dir.join(f).join(MARKER_FILENAME),
+        None => addon_dir.join(format!(".{}{}", sanitize_filename(&marker.name), MARKER_FILENAME)),
+    };
+    let json = serde_json::to_string_pretty(marker).map_err(|e| e.to_string())?;
+    std::fs::write(marker_path, json).map_err(|e| e.to_string())
+}
+
+/// Scans immediate subfolders of `addon_dir` for `.sotlauncher.json` markers
+/// and returns the installed state they describe, keyed by the addon name
+/// each marker records (not the folder name, which need not match).
+fn scan_installed_addons(addon_dir: &Path) -> HashMap<String, InstalledAddonState> {
+    let mut result = HashMap::new();
+    let Ok(entries) = std::fs::read_dir(addon_dir) else {
+        return result;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Ok(raw) = std::fs::read_to_string(path.join(MARKER_FILENAME)) else {
+            continue;
+        };
+        let Ok(marker) = serde_json::from_str::<AddonMarker>(&raw) else {
+            continue;
+        };
+        let files_present = !marker.files.is_empty() && marker.files.iter().all(|f| addon_dir.join(f).exists());
+        result.insert(
+            marker.name.clone(),
+            InstalledAddonState {
+                version: marker.version,
+                sha256: marker.sha256,
+                files: marker.files,
+                files_present,
+            },
+        );
+    }
+    result
+}
+
+fn is_addon_wanted(addon: &AddonEntry, addon_enabled: &HashMap<String, bool>) -> bool {
     match addon.category.as_str() {
         "mandatory" => true,
         "recommended" => *addon_enabled.get(&addon.name).unwrap_or(&true),
@@ -126,21 +174,41 @@ fn is_addon_wanted(addon: &AddonEntry, addon_enabled: &std::collections::HashMap
     }
 }
 
+/// Computes current on-disk state for everything in `manifest`, by scanning
+/// addon markers and hashing WTF files directly. No cache file involved.
+pub fn get_installed_state(game_path: &str, manifest: &Manifest) -> InstalledState {
+    let addon_dir = PathBuf::from(game_path).join("Interface").join("AddOns");
+    let addons = scan_installed_addons(&addon_dir);
+
+    let game_root = PathBuf::from(game_path);
+    let mut wtf_files = HashMap::new();
+    for entry in &manifest.wtf_files {
+        if let Ok(path) = safe_join(&game_root, &entry.target_path) {
+            if let Ok(hash) = sha256_file(&path) {
+                wtf_files.insert(entry.name.clone(), hash);
+            }
+        }
+    }
+
+    InstalledState { addons, wtf_files }
+}
+
 pub async fn sync_addons(
     app: &AppHandle,
     game_path: &str,
     addons: &[AddonEntry],
-    addon_enabled: &std::collections::HashMap<String, bool>,
-    lock: &mut LockFile,
+    addon_enabled: &HashMap<String, bool>,
 ) -> SyncResult {
     let mut result = SyncResult { updated: vec![], skipped: vec![], removed: vec![], failed: vec![] };
     let addon_dir = PathBuf::from(game_path).join("Interface").join("AddOns");
+    let _ = std::fs::create_dir_all(&addon_dir);
+    let installed = scan_installed_addons(&addon_dir);
     let total = addons.len();
     let manifest_names: std::collections::HashSet<&str> = addons.iter().map(|a| a.name.as_str()).collect();
 
     for (idx, addon) in addons.iter().enumerate() {
         if !is_addon_wanted(addon, addon_enabled) {
-            if let Some(prev) = lock.addons.remove(&addon.name) {
+            if let Some(prev) = installed.get(&addon.name) {
                 remove_addon_files(&addon_dir, &prev.files);
                 result.removed.push(addon.name.clone());
                 emit_progress(app, &addon.name, "done", idx + 1, total, Some("removed".to_string()));
@@ -148,14 +216,19 @@ pub async fn sync_addons(
             continue;
         }
 
-        let up_to_date = lock
-            .addons
+        let up_to_date = installed
             .get(&addon.name)
-            .map(|e| e.version == addon.version && e.sha256.eq_ignore_ascii_case(&addon.sha256))
+            .map(|s| s.files_present && s.version == addon.version && s.sha256.eq_ignore_ascii_case(&addon.sha256))
             .unwrap_or(false);
         if up_to_date {
             result.skipped.push(addon.name.clone());
             continue;
+        }
+
+        // Clean up the previous version's files first, in case the new zip
+        // dropped a folder the old one had (otherwise it'd be left orphaned).
+        if let Some(prev) = installed.get(&addon.name) {
+            remove_addon_files(&addon_dir, &prev.files);
         }
 
         emit_progress(app, &addon.name, "downloading", idx + 1, total, None);
@@ -195,54 +268,40 @@ pub async fn sync_addons(
         };
         let _ = std::fs::remove_file(&tmp_zip);
 
-        lock.addons.insert(
-            addon.name.clone(),
-            LockEntry { version: addon.version.clone(), sha256: addon.sha256.clone(), files: extracted_files },
-        );
+        let marker = AddonMarker {
+            name: addon.name.clone(),
+            version: addon.version.clone(),
+            sha256: addon.sha256.clone(),
+            files: extracted_files,
+        };
+        if let Err(e) = write_addon_marker(&addon_dir, &marker) {
+            emit_progress(app, &addon.name, "error", idx + 1, total, Some(e.clone()));
+            result.failed.push((addon.name.clone(), e));
+            continue;
+        }
+
         result.updated.push(addon.name.clone());
         emit_progress(app, &addon.name, "done", idx + 1, total, None);
     }
 
     // Addons that were installed previously but no longer appear in the
     // manifest at all (e.g. an officer deleted the entry) get cleaned up too.
-    let stale: Vec<String> = lock
-        .addons
-        .keys()
-        .filter(|name| !manifest_names.contains(name.as_str()))
-        .cloned()
-        .collect();
-    for name in stale {
-        if let Some(prev) = lock.addons.remove(&name) {
-            remove_addon_files(&addon_dir, &prev.files);
-            result.removed.push(name);
+    for (name, state) in &installed {
+        if !manifest_names.contains(name.as_str()) {
+            remove_addon_files(&addon_dir, &state.files);
+            result.removed.push(name.clone());
         }
     }
 
-    lock.addon_enabled = addon_enabled.clone();
     result
 }
 
-pub async fn sync_wtf_files(
-    app: &AppHandle,
-    game_path: &str,
-    files: &[WtfEntry],
-    lock: &mut LockFile,
-) -> SyncResult {
+pub async fn sync_wtf_files(app: &AppHandle, game_path: &str, files: &[WtfEntry]) -> SyncResult {
     let mut result = SyncResult { updated: vec![], skipped: vec![], removed: vec![], failed: vec![] };
     let game_root = PathBuf::from(game_path);
     let total = files.len();
 
     for (idx, entry) in files.iter().enumerate() {
-        let up_to_date = lock
-            .wtf_files
-            .get(&entry.name)
-            .map(|e| e.version == entry.version && e.sha256.eq_ignore_ascii_case(&entry.sha256))
-            .unwrap_or(false);
-        if up_to_date {
-            result.skipped.push(entry.name.clone());
-            continue;
-        }
-
         let dest = match safe_join(&game_root, &entry.target_path) {
             Ok(p) => p,
             Err(e) => {
@@ -250,6 +309,13 @@ pub async fn sync_wtf_files(
                 continue;
             }
         };
+
+        let up_to_date = dest.exists()
+            && sha256_file(&dest).map(|h| h.eq_ignore_ascii_case(&entry.sha256)).unwrap_or(false);
+        if up_to_date {
+            result.skipped.push(entry.name.clone());
+            continue;
+        }
 
         emit_progress(app, &entry.name, "downloading", idx + 1, total, None);
         if let Err(e) = download_to_file(&entry.url, &dest).await {
@@ -274,10 +340,6 @@ pub async fn sync_wtf_files(
             }
         }
 
-        lock.wtf_files.insert(
-            entry.name.clone(),
-            LockEntry { version: entry.version.clone(), sha256: entry.sha256.clone(), files: vec![] },
-        );
         result.updated.push(entry.name.clone());
         emit_progress(app, &entry.name, "done", idx + 1, total, None);
     }
@@ -360,5 +422,72 @@ mod tests {
         overrides.insert(optional.name.clone(), true);
         assert!(!is_addon_wanted(&recommended, &overrides));
         assert!(is_addon_wanted(&optional, &overrides));
+    }
+
+    #[test]
+    fn marker_write_and_scan_round_trip() {
+        let tmp = std::env::temp_dir().join(format!("sotgl-test-marker-{}", std::process::id()));
+        let addon_dir = tmp.join("AddOns");
+        std::fs::create_dir_all(&addon_dir).unwrap();
+
+        let zip_path = tmp.join("AddonA.zip");
+        make_test_zip(&zip_path);
+        let files = extract_zip(&zip_path, &addon_dir).unwrap();
+
+        let marker = AddonMarker {
+            name: "GuildHealBot".to_string(), // deliberately different from the folder name "AddonA"
+            version: "1.2.3".to_string(),
+            sha256: "deadbeef".to_string(),
+            files: files.clone(),
+        };
+        write_addon_marker(&addon_dir, &marker).unwrap();
+        assert!(addon_dir.join("AddonA").join(MARKER_FILENAME).exists());
+
+        let scanned = scan_installed_addons(&addon_dir);
+        let state = scanned.get("GuildHealBot").expect("marker should be found by its recorded name, not folder name");
+        assert_eq!(state.version, "1.2.3");
+        assert!(state.files_present);
+
+        // Deleting the whole folder makes the addon disappear from scan
+        // results entirely (equivalent to "not installed").
+        std::fs::remove_dir_all(addon_dir.join("AddonA")).unwrap();
+        let scanned_after_deletion = scan_installed_addons(&addon_dir);
+        assert!(
+            !scanned_after_deletion.contains_key("GuildHealBot"),
+            "scanning shouldn't find a marker for a folder that no longer exists"
+        );
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn files_present_catches_a_missing_secondary_folder() {
+        // Some addons unpack into more than one top-level folder (e.g. a
+        // core folder plus an options/plugins folder). The marker lives in
+        // just one of them, so presence must be checked across all of them,
+        // not just the one that happens to hold the marker file.
+        let tmp = std::env::temp_dir().join(format!("sotgl-test-multifolder-{}", std::process::id()));
+        let addon_dir = tmp.join("AddOns");
+        std::fs::create_dir_all(addon_dir.join("BigAddon")).unwrap();
+        std::fs::write(addon_dir.join("BigAddon/BigAddon.toc"), b"## Interface: 100000").unwrap();
+        std::fs::create_dir_all(addon_dir.join("BigAddon_Options")).unwrap();
+        std::fs::write(addon_dir.join("BigAddon_Options/Options.toc"), b"## Interface: 100000").unwrap();
+
+        let marker = AddonMarker {
+            name: "BigAddon".to_string(),
+            version: "1.0".to_string(),
+            sha256: "abc123".to_string(),
+            files: vec!["BigAddon".to_string(), "BigAddon_Options".to_string()],
+        };
+        write_addon_marker(&addon_dir, &marker).unwrap();
+        assert!(scan_installed_addons(&addon_dir).get("BigAddon").unwrap().files_present);
+
+        // Delete only the secondary folder; the marker (in BigAddon/) survives.
+        std::fs::remove_dir_all(addon_dir.join("BigAddon_Options")).unwrap();
+        let scanned = scan_installed_addons(&addon_dir);
+        let state = scanned.get("BigAddon").expect("marker folder itself is untouched, so it's still found");
+        assert!(!state.files_present, "missing secondary folder must be caught even though the marker itself is intact");
+
+        std::fs::remove_dir_all(&tmp).ok();
     }
 }

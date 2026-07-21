@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type {
   CombinedSyncResult,
-  LockFile,
+  InstalledState,
   Manifest,
   Settings,
   SyncProgress,
@@ -44,8 +44,8 @@ export function fetchManifest(apiBaseUrl: string): Promise<Manifest> {
   return invoke('fetch_manifest', { apiBaseUrl })
 }
 
-export function getLockState(): Promise<LockFile> {
-  return invoke('get_lock_state')
+export function getInstalledState(manifest: Manifest): Promise<InstalledState> {
+  return invoke('get_installed_state', { manifest })
 }
 
 export function runSync(manifest: Manifest, addonEnabled: Record<string, boolean>): Promise<CombinedSyncResult> {

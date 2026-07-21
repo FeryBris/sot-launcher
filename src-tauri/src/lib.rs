@@ -33,7 +33,7 @@ pub fn run() {
       commands::set_auto_launch,
       commands::pick_game_folder,
       commands::fetch_manifest,
-      commands::get_lock_state,
+      commands::get_installed_state,
       commands::run_sync,
       commands::launch_game,
     ])

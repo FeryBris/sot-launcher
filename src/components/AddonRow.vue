@@ -9,9 +9,10 @@ const locked = computed(() => props.addon.category === 'mandatory')
 const wanted = computed(() => isAddonWanted(props.addon))
 
 const status = computed<'synced' | 'pending' | 'removing' | 'off'>(() => {
-  const installed = store.lock?.addons[props.addon.name]
+  const installed = store.installed?.addons[props.addon.name]
   if (wanted.value) {
-    const upToDate = !!installed && installed.version === props.addon.version && installed.sha256 === props.addon.sha256
+    const upToDate =
+      !!installed && installed.filesPresent && installed.version === props.addon.version && installed.sha256 === props.addon.sha256
     return upToDate ? 'synced' : 'pending'
   }
   return installed ? 'removing' : 'off'

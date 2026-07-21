@@ -1,11 +1,11 @@
 import { reactive } from 'vue'
 import * as api from './api'
-import type { AddonEntry, LockFile, Manifest, Settings, SyncProgress } from './types'
+import type { AddonEntry, InstalledState, Manifest, Settings, SyncProgress } from './types'
 
 interface Store {
   settings: Settings
   manifest: Manifest | null
-  lock: LockFile | null
+  installed: InstalledState | null
   /** Explicit user overrides only; absence falls back to the category default. */
   addonEnabled: Record<string, boolean>
   loadingManifest: boolean
@@ -17,9 +17,9 @@ interface Store {
 }
 
 export const store = reactive<Store>({
-  settings: { gamePath: null, launchCommand: null, closeOnLaunch: false, autoLaunch: false, apiBaseUrl: '', apiKey: null },
+  settings: { gamePath: null, launchCommand: null, closeOnLaunch: false, autoLaunch: false, apiBaseUrl: '', apiKey: null, addonEnabled: {} },
   manifest: null,
-  lock: null,
+  installed: null,
   addonEnabled: {},
   loadingManifest: false,
   manifestError: '',
@@ -34,8 +34,7 @@ let progressUnlisten: (() => void) | null = null
 export async function init() {
   if (store.loaded) return
   store.settings = await api.getSettings()
-  store.lock = await api.getLockState()
-  store.addonEnabled = { ...store.lock.addonEnabled }
+  store.addonEnabled = { ...store.settings.addonEnabled }
   store.loaded = true
 
   progressUnlisten = await api.onSyncProgress((p) => {
@@ -52,6 +51,7 @@ export async function refreshManifest() {
   store.manifestError = ''
   try {
     store.manifest = await api.fetchManifest(store.settings.apiBaseUrl)
+    await refreshInstalledState()
   } catch (e) {
     store.manifestError = String(e)
   } finally {
@@ -59,8 +59,22 @@ export async function refreshManifest() {
   }
 }
 
+/** Re-reads on-disk state (addon markers + WTF file hashes) against the current manifest. */
+export async function refreshInstalledState() {
+  if (!store.manifest || !store.settings.gamePath) {
+    store.installed = null
+    return
+  }
+  try {
+    store.installed = await api.getInstalledState(store.manifest)
+  } catch {
+    store.installed = null
+  }
+}
+
 export async function saveGamePath(path: string) {
   store.settings = await api.setGamePath(path)
+  await refreshInstalledState()
 }
 
 export async function saveLaunchCommand(command: string) {
@@ -104,7 +118,7 @@ export async function syncNow() {
   store.syncProgress = null
   try {
     await api.runSync(store.manifest, store.addonEnabled)
-    store.lock = await api.getLockState()
+    await refreshInstalledState()
   } catch (e) {
     store.syncError = String(e)
   } finally {
@@ -114,12 +128,12 @@ export async function syncNow() {
 }
 
 export function pendingCount(): number {
-  if (!store.manifest || !store.lock) return 0
+  if (!store.manifest || !store.installed) return 0
   let count = 0
   for (const addon of store.manifest.addons) {
-    const installed = store.lock.addons[addon.name]
+    const installed = store.installed.addons[addon.name]
     if (isAddonWanted(addon)) {
-      if (!installed || installed.version !== addon.version || installed.sha256 !== addon.sha256) {
+      if (!installed || !installed.filesPresent || installed.version !== addon.version || installed.sha256 !== addon.sha256) {
         count++
       }
     } else if (installed) {
@@ -127,8 +141,8 @@ export function pendingCount(): number {
     }
   }
   for (const wtf of store.manifest.wtfFiles) {
-    const installed = store.lock.wtfFiles[wtf.name]
-    if (!installed || installed.version !== wtf.version || installed.sha256 !== wtf.sha256) {
+    const hash = store.installed.wtfFiles[wtf.name]
+    if (!hash || hash !== wtf.sha256) {
       count++
     }
   }

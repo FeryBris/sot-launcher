@@ -36,18 +36,20 @@ export interface Settings {
   autoLaunch: boolean
   apiBaseUrl: string
   apiKey: string | null
+  addonEnabled: Record<string, boolean>
 }
 
-export interface LockEntry {
+export interface InstalledAddonState {
   version: string
   sha256: string
   files: string[]
+  filesPresent: boolean
 }
 
-export interface LockFile {
-  addons: Record<string, LockEntry>
-  wtfFiles: Record<string, LockEntry>
-  addonEnabled: Record<string, boolean>
+export interface InstalledState {
+  addons: Record<string, InstalledAddonState>
+  /** addon/wtf name -> sha256 currently on disk */
+  wtfFiles: Record<string, string>
 }
 
 export interface SyncProgress {

@@ -1,6 +1,6 @@
 use crate::settings;
 use crate::sync;
-use crate::types::{LockFile, Manifest, Settings, SyncResult};
+use crate::types::{InstalledState, Manifest, Settings, SyncResult};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
@@ -117,8 +117,10 @@ pub async fn fetch_manifest(
 }
 
 #[tauri::command]
-pub fn get_lock_state(app: AppHandle) -> Result<LockFile, String> {
-    settings::load_lock(&app)
+pub fn get_installed_state(app: AppHandle, manifest: Manifest) -> Result<InstalledState, String> {
+    let s = settings::load_settings(&app)?;
+    let game_path = s.game_path.ok_or_else(|| "no game folder configured".to_string())?;
+    Ok(sync::get_installed_state(&game_path, &manifest))
 }
 
 #[tauri::command]
@@ -127,13 +129,14 @@ pub async fn run_sync(
     manifest: Manifest,
     addon_enabled: std::collections::HashMap<String, bool>,
 ) -> Result<CombinedSyncResult, String> {
-    let s = settings::load_settings(&app)?;
-    let game_path = s.game_path.ok_or_else(|| "no game folder configured".to_string())?;
+    let mut s = settings::load_settings(&app)?;
+    let game_path = s.game_path.clone().ok_or_else(|| "no game folder configured".to_string())?;
 
-    let mut lock = settings::load_lock(&app)?;
-    let addons = sync::sync_addons(&app, &game_path, &manifest.addons, &addon_enabled, &mut lock).await;
-    let wtf_files = sync::sync_wtf_files(&app, &game_path, &manifest.wtf_files, &mut lock).await;
-    settings::save_lock(&app, &lock)?;
+    let addons = sync::sync_addons(&app, &game_path, &manifest.addons, &addon_enabled).await;
+    let wtf_files = sync::sync_wtf_files(&app, &game_path, &manifest.wtf_files).await;
+
+    s.addon_enabled = addon_enabled;
+    settings::save_settings(&app, &s)?;
 
     Ok(CombinedSyncResult { addons, wtf_files })
 }

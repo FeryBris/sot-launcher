@@ -61,36 +61,51 @@ pub struct Settings {
     /// Sent as the X-API-KEY header on manifest/update requests.
     #[serde(default)]
     pub api_key: Option<String>,
+    /// addon name -> whether the user wants it active. Only stores explicit
+    /// overrides; anything absent falls back to its category default
+    /// (mandatory: always on, recommended: on, optional: off). This is a
+    /// user preference, not installation state, so it lives here rather
+    /// than being derived from the game folder like everything else.
+    #[serde(default)]
+    pub addon_enabled: std::collections::HashMap<String, bool>,
 }
 
 fn default_api_base_url() -> String {
     "https://sot.sk/api/launcher".to_string()
 }
 
+/// Written as `.sotlauncher.json` inside an addon's own folder at install
+/// time. Installed state is derived by scanning the game folder for these
+/// markers rather than trusting a separate cache, so it stays correct even
+/// if files are deleted by hand or the WoW folder is moved to a new machine.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct LockFile {
-    /// item name -> installed version+hash, keyed separately for addons and wtf files
-    #[serde(default)]
-    pub addons: std::collections::HashMap<String, LockEntry>,
-    #[serde(default)]
-    pub wtf_files: std::collections::HashMap<String, LockEntry>,
-    /// addon name -> whether the user wants it active. Only stores explicit
-    /// overrides; anything absent falls back to its category default
-    /// (mandatory: always on, recommended: on, optional: off).
-    #[serde(default)]
-    pub addon_enabled: std::collections::HashMap<String, bool>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct LockEntry {
+pub struct AddonMarker {
+    pub name: String,
     pub version: String,
     pub sha256: String,
     /// Top-level file/folder names this addon's zip wrote under Interface/AddOns,
     /// so a later removal only ever deletes what this addon actually created.
     #[serde(default)]
     pub files: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct InstalledAddonState {
+    pub version: String,
+    pub sha256: String,
+    pub files: Vec<String>,
+    /// False if any file/folder the marker says this addon owns is actually missing.
+    pub files_present: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct InstalledState {
+    pub addons: std::collections::HashMap<String, InstalledAddonState>,
+    /// wtf file name -> sha256 currently on disk (absent if the file doesn't exist)
+    pub wtf_files: std::collections::HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
