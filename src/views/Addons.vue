@@ -18,16 +18,16 @@ const customAddons = computed(() =>
     .sort((a, b) => a.name.localeCompare(b.name)),
 )
 
-function onDeleteCustom(name: string) {
-  if (confirmDelete(name)) {
+async function onDeleteCustom(name: string) {
+  if (await confirmDelete(name)) {
     deleteAddonNow(name)
   }
 }
 
-function onToggleCustom(name: string, currentlyDisabled: boolean) {
+async function onToggleCustom(name: string, currentlyDisabled: boolean) {
   const disabling = !currentlyDisabled
   if (disabling) {
-    if (confirmDisable(name)) setAddonDisabledNow(name, true)
+    if (await confirmDisable(name)) setAddonDisabledNow(name, true)
   } else {
     setAddonDisabledNow(name, false) // re-enabling isn't destructive, no confirm needed
   }

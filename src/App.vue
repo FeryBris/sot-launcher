@@ -7,6 +7,7 @@ import HomeView from './views/Home.vue'
 import AddonsView from './views/Addons.vue'
 import SettingsView from './views/Settings.vue'
 import PlayBar from './components/PlayBar.vue'
+import ConfirmDialog from './components/ConfirmDialog.vue'
 import { init as initStore, playNow, store } from './store'
 
 function authHeaders(): Record<string, string> {
@@ -114,6 +115,7 @@ onMounted(async () => {
     </main>
   </div>
   <PlayBar />
+  <ConfirmDialog />
 </template>
 
 <style scoped>

@@ -2,6 +2,13 @@ import { reactive } from 'vue'
 import * as api from './api'
 import type { AddonEntry, InstalledState, Manifest, Settings, SyncProgress } from './types'
 
+export interface ConfirmRequest {
+  title: string
+  message: string
+  confirmLabel: string
+  danger: boolean
+}
+
 interface Store {
   settings: Settings
   manifest: Manifest | null
@@ -28,6 +35,26 @@ export const store = reactive<Store>({
   syncError: '',
   loaded: false,
 })
+
+/** Active confirm-dialog request, rendered by <ConfirmDialog> mounted once at the app root. */
+export const confirmState = reactive<{ request: ConfirmRequest | null }>({ request: null })
+let pendingConfirmResolve: ((value: boolean) => void) | null = null
+
+/** Shows the themed confirm modal and resolves once the user picks an option. */
+function requestConfirm(request: ConfirmRequest): Promise<boolean> {
+  // Only one confirm dialog can be active at a time; resolve any stale one as cancelled.
+  pendingConfirmResolve?.(false)
+  return new Promise((resolve) => {
+    pendingConfirmResolve = resolve
+    confirmState.request = request
+  })
+}
+
+export function answerConfirm(value: boolean) {
+  confirmState.request = null
+  pendingConfirmResolve?.(value)
+  pendingConfirmResolve = null
+}
 
 let progressUnlisten: (() => void) | null = null
 
@@ -134,17 +161,17 @@ function dependentWarning(name: string, verb: string): string {
   return `\n\n${dependents.join(', ')} ${plural} "${name}" to work. ${verb} it will likely break ${those} in-game.`
 }
 
-/** One confirm dialog for a disable action: always asks, and folds in a
- *  dependents warning when relevant instead of showing a second popup. */
-export function confirmDisable(name: string): boolean {
+/** One themed confirm dialog for a disable action: always asks, and folds in
+ *  a dependents warning when relevant instead of showing a second popup. */
+export function confirmDisable(name: string): Promise<boolean> {
   const message = `Disable ${name}?${dependentWarning(name, 'Disabling')}\n\nIt will move to Interface/.DisabledAddons - you can re-enable it later.`
-  return confirm(message)
+  return requestConfirm({ title: 'Disable addon', message, confirmLabel: 'Disable', danger: false })
 }
 
-/** One confirm dialog for a permanent delete action. */
-export function confirmDelete(name: string): boolean {
+/** One themed confirm dialog for a permanent delete action. */
+export function confirmDelete(name: string): Promise<boolean> {
   const message = `Delete ${name} completely?${dependentWarning(name, 'Deleting')}\n\nThis can't be undone - you'd need to sync it again to get it back.`
-  return confirm(message)
+  return requestConfirm({ title: 'Delete addon', message, confirmLabel: 'Delete', danger: true })
 }
 
 /** Immediate disable/enable for one addon (managed or custom) - moves its folder

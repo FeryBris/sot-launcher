@@ -33,17 +33,18 @@ const statusLabel: Record<typeof status.value, string> = {
   off: 'Off',
 }
 
-function onToggle(e: Event) {
+async function onToggle(e: Event) {
   const target = e.target as HTMLInputElement
-  if (!target.checked && !confirmDisable(props.addon.name)) {
+  const checked = target.checked
+  if (!checked && !(await confirmDisable(props.addon.name))) {
     target.checked = wanted.value // revert: nothing reactive changed, so the DOM won't re-sync on its own
     return
   }
-  setAddonEnabled(props.addon.name, target.checked)
+  setAddonEnabled(props.addon.name, checked)
 }
 
-function onDelete() {
-  if (confirmDelete(props.addon.name)) {
+async function onDelete() {
+  if (await confirmDelete(props.addon.name)) {
     deleteAddonNow(props.addon.name)
   }
 }
