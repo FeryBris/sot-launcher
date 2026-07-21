@@ -72,16 +72,27 @@ fn sha256_file(path: &Path) -> Result<String, String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
-fn extract_zip(zip_path: &Path, dest_dir: &Path) -> Result<(), String> {
+/// Extracts the zip into `dest_dir` and returns the top-level file/folder
+/// names it wrote (the first path component of each entry), so a later
+/// removal can precisely delete only what this addon created.
+fn extract_zip(zip_path: &Path, dest_dir: &Path) -> Result<Vec<String>, String> {
     let file = std::fs::File::open(zip_path).map_err(|e| e.to_string())?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
+    let mut top_level: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
         // enclosed_name() refuses entries that try to escape dest_dir (zip-slip protection)
         let Some(name) = entry.enclosed_name() else {
             continue;
         };
-        let outpath = dest_dir.join(name);
+        if let Some(Component::Normal(first)) = name.components().next() {
+            if let Some(s) = first.to_str() {
+                top_level.insert(s.to_string());
+            }
+        }
+
+        let outpath = dest_dir.join(&name);
         if entry.is_dir() {
             std::fs::create_dir_all(&outpath).map_err(|e| e.to_string())?;
         } else {
@@ -92,25 +103,48 @@ fn extract_zip(zip_path: &Path, dest_dir: &Path) -> Result<(), String> {
             std::io::copy(&mut entry, &mut outfile).map_err(|e| e.to_string())?;
         }
     }
-    Ok(())
+    Ok(top_level.into_iter().collect())
+}
+
+/// Deletes only the top-level entries recorded for an addon at install time.
+fn remove_addon_files(addon_dir: &Path, files: &[String]) {
+    for name in files {
+        let path = addon_dir.join(name);
+        if path.is_dir() {
+            let _ = std::fs::remove_dir_all(&path);
+        } else {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+}
+
+fn is_addon_wanted(addon: &AddonEntry, addon_enabled: &std::collections::HashMap<String, bool>) -> bool {
+    match addon.category.as_str() {
+        "mandatory" => true,
+        "recommended" => *addon_enabled.get(&addon.name).unwrap_or(&true),
+        _ => *addon_enabled.get(&addon.name).unwrap_or(&false),
+    }
 }
 
 pub async fn sync_addons(
     app: &AppHandle,
     game_path: &str,
     addons: &[AddonEntry],
-    selected_optional: &[String],
+    addon_enabled: &std::collections::HashMap<String, bool>,
     lock: &mut LockFile,
 ) -> SyncResult {
-    let mut result = SyncResult { updated: vec![], skipped: vec![], failed: vec![] };
+    let mut result = SyncResult { updated: vec![], skipped: vec![], removed: vec![], failed: vec![] };
     let addon_dir = PathBuf::from(game_path).join("Interface").join("AddOns");
     let total = addons.len();
+    let manifest_names: std::collections::HashSet<&str> = addons.iter().map(|a| a.name.as_str()).collect();
 
     for (idx, addon) in addons.iter().enumerate() {
-        let wanted = addon.category == "mandatory"
-            || addon.category == "recommended"
-            || selected_optional.iter().any(|n| n == &addon.name);
-        if !wanted {
+        if !is_addon_wanted(addon, addon_enabled) {
+            if let Some(prev) = lock.addons.remove(&addon.name) {
+                remove_addon_files(&addon_dir, &prev.files);
+                result.removed.push(addon.name.clone());
+                emit_progress(app, &addon.name, "done", idx + 1, total, Some("removed".to_string()));
+            }
             continue;
         }
 
@@ -150,23 +184,41 @@ pub async fn sync_addons(
         }
 
         emit_progress(app, &addon.name, "extracting", idx + 1, total, None);
-        if let Err(e) = extract_zip(&tmp_zip, &addon_dir) {
-            let _ = std::fs::remove_file(&tmp_zip);
-            emit_progress(app, &addon.name, "error", idx + 1, total, Some(e.clone()));
-            result.failed.push((addon.name.clone(), e));
-            continue;
-        }
+        let extracted_files = match extract_zip(&tmp_zip, &addon_dir) {
+            Ok(files) => files,
+            Err(e) => {
+                let _ = std::fs::remove_file(&tmp_zip);
+                emit_progress(app, &addon.name, "error", idx + 1, total, Some(e.clone()));
+                result.failed.push((addon.name.clone(), e));
+                continue;
+            }
+        };
         let _ = std::fs::remove_file(&tmp_zip);
 
         lock.addons.insert(
             addon.name.clone(),
-            LockEntry { version: addon.version.clone(), sha256: addon.sha256.clone() },
+            LockEntry { version: addon.version.clone(), sha256: addon.sha256.clone(), files: extracted_files },
         );
         result.updated.push(addon.name.clone());
         emit_progress(app, &addon.name, "done", idx + 1, total, None);
     }
 
-    lock.optional_selected = selected_optional.to_vec();
+    // Addons that were installed previously but no longer appear in the
+    // manifest at all (e.g. an officer deleted the entry) get cleaned up too.
+    let stale: Vec<String> = lock
+        .addons
+        .keys()
+        .filter(|name| !manifest_names.contains(name.as_str()))
+        .cloned()
+        .collect();
+    for name in stale {
+        if let Some(prev) = lock.addons.remove(&name) {
+            remove_addon_files(&addon_dir, &prev.files);
+            result.removed.push(name);
+        }
+    }
+
+    lock.addon_enabled = addon_enabled.clone();
     result
 }
 
@@ -176,7 +228,7 @@ pub async fn sync_wtf_files(
     files: &[WtfEntry],
     lock: &mut LockFile,
 ) -> SyncResult {
-    let mut result = SyncResult { updated: vec![], skipped: vec![], failed: vec![] };
+    let mut result = SyncResult { updated: vec![], skipped: vec![], removed: vec![], failed: vec![] };
     let game_root = PathBuf::from(game_path);
     let total = files.len();
 
@@ -224,11 +276,89 @@ pub async fn sync_wtf_files(
 
         lock.wtf_files.insert(
             entry.name.clone(),
-            LockEntry { version: entry.version.clone(), sha256: entry.sha256.clone() },
+            LockEntry { version: entry.version.clone(), sha256: entry.sha256.clone(), files: vec![] },
         );
         result.updated.push(entry.name.clone());
         emit_progress(app, &entry.name, "done", idx + 1, total, None);
     }
 
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_test_zip(path: &Path) {
+        let file = std::fs::File::create(path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let opts = zip::write::SimpleFileOptions::default();
+
+        zip.start_file("AddonA/AddonA.toc", opts).unwrap();
+        zip.write_all(b"## Interface: 100000").unwrap();
+
+        zip.start_file("AddonA/core.lua", opts).unwrap();
+        zip.write_all(b"-- core").unwrap();
+
+        zip.start_file("AddonA/libs/lib.lua", opts).unwrap();
+        zip.write_all(b"-- lib").unwrap();
+
+        zip.finish().unwrap();
+    }
+
+    #[test]
+    fn extract_zip_reports_only_top_level_entries_and_removal_deletes_exactly_them() {
+        let tmp = std::env::temp_dir().join(format!("sotgl-test-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let zip_path = tmp.join("AddonA.zip");
+        let addon_dir = tmp.join("AddOns");
+        std::fs::create_dir_all(&addon_dir).unwrap();
+
+        make_test_zip(&zip_path);
+
+        let top_level = extract_zip(&zip_path, &addon_dir).unwrap();
+        assert_eq!(top_level, vec!["AddonA".to_string()]);
+        assert!(addon_dir.join("AddonA/AddonA.toc").exists());
+        assert!(addon_dir.join("AddonA/libs/lib.lua").exists());
+
+        // A sibling addon must survive the removal of AddonA.
+        std::fs::create_dir_all(addon_dir.join("OtherAddon")).unwrap();
+        std::fs::write(addon_dir.join("OtherAddon/OtherAddon.toc"), b"## Interface: 100000").unwrap();
+
+        remove_addon_files(&addon_dir, &top_level);
+        assert!(!addon_dir.join("AddonA").exists());
+        assert!(addon_dir.join("OtherAddon").exists());
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn is_addon_wanted_applies_category_defaults() {
+        let mandatory = AddonEntry {
+            name: "M".into(),
+            version: "1".into(),
+            url: String::new(),
+            sha256: String::new(),
+            category: "mandatory".into(),
+            changelog: String::new(),
+        };
+        let recommended = AddonEntry { name: "R".into(), category: "recommended".into(), ..mandatory.clone() };
+        let optional = AddonEntry { name: "O".into(), category: "optional".into(), ..mandatory.clone() };
+
+        let mut overrides = std::collections::HashMap::new();
+
+        // No overrides: mandatory/recommended on by default, optional off.
+        assert!(is_addon_wanted(&mandatory, &overrides));
+        assert!(is_addon_wanted(&recommended, &overrides));
+        assert!(!is_addon_wanted(&optional, &overrides));
+
+        // Explicit opt-out of recommended, opt-in of optional.
+        overrides.insert("M".to_string(), false);
+        assert!(is_addon_wanted(&mandatory, &overrides)); // mandatory ignores overrides
+        overrides.clear();
+        overrides.insert(recommended.name.clone(), false);
+        overrides.insert(optional.name.clone(), true);
+        assert!(!is_addon_wanted(&recommended, &overrides));
+        assert!(is_addon_wanted(&optional, &overrides));
+    }
 }

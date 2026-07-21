@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { store } from '../store'
-import heroImg from '../assets/hero.png'
+import { store } from '../store';
+import heroImg from '../assets/hero.png';
 </script>
 
 <template>

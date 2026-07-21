@@ -1,15 +1,33 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import { store, saveApiBaseUrl, saveGamePath } from '../store'
+import { store, saveApiBaseUrl, saveApiKey, saveAutoLaunch, saveCloseOnLaunch, saveGamePath, saveLaunchCommand } from '../store'
 import * as api from '../api'
 
 const apiUrlDraft = ref(store.settings.apiBaseUrl)
 const apiUrlSaved = ref(false)
+const apiKeyDraft = ref(store.settings.apiKey ?? '')
+const apiKeySaved = ref(false)
+const launchCmdDraft = ref(store.settings.launchCommand ?? '')
+const launchCmdSaved = ref(false)
 
 watch(
   () => store.settings.apiBaseUrl,
   (v) => {
     apiUrlDraft.value = v
+  },
+)
+
+watch(
+  () => store.settings.apiKey,
+  (v) => {
+    apiKeyDraft.value = v ?? ''
+  },
+)
+
+watch(
+  () => store.settings.launchCommand,
+  (v) => {
+    launchCmdDraft.value = v ?? ''
   },
 )
 
@@ -24,6 +42,26 @@ async function saveApiUrl() {
   await saveApiBaseUrl(apiUrlDraft.value.trim())
   apiUrlSaved.value = true
   setTimeout(() => (apiUrlSaved.value = false), 1500)
+}
+
+async function saveApiKeyValue() {
+  await saveApiKey(apiKeyDraft.value.trim())
+  apiKeySaved.value = true
+  setTimeout(() => (apiKeySaved.value = false), 1500)
+}
+
+async function saveLaunchCmd() {
+  await saveLaunchCommand(launchCmdDraft.value.trim())
+  launchCmdSaved.value = true
+  setTimeout(() => (launchCmdSaved.value = false), 1500)
+}
+
+async function onCloseOnLaunchChange(e: Event) {
+  await saveCloseOnLaunch((e.target as HTMLInputElement).checked)
+}
+
+async function onAutoLaunchChange(e: Event) {
+  await saveAutoLaunch((e.target as HTMLInputElement).checked)
 }
 </script>
 
@@ -41,12 +79,64 @@ async function saveApiUrl() {
     </section>
 
     <section class="field">
+      <label>Custom Launch Command (optional)</label>
+      <div class="row">
+        <input
+          class="path"
+          type="text"
+          v-model="launchCmdDraft"
+          placeholder='e.g. lutris lutris:rungame/world-of-warcraft'
+        />
+        <button class="btn" @click="saveLaunchCmd">{{ launchCmdSaved ? 'Saved' : 'Save' }}</button>
+      </div>
+      <p class="hint">
+        Leave empty to auto-detect and launch <code>Wow.exe</code> directly (via Wine on Linux/macOS).
+        If you play through Lutris, Bottles, CrossOver, or a custom Wine prefix, put that launch
+        command here instead &mdash; <code>{game_path}</code> is replaced with the folder above.
+      </p>
+    </section>
+
+    <section class="field">
+      <label>Behavior</label>
+      <label class="checkbox-row">
+        <input
+          type="checkbox"
+          :checked="store.settings.closeOnLaunch"
+          @change="onCloseOnLaunchChange"
+        />
+        Close the launcher once the game starts
+      </label>
+      <label class="checkbox-row">
+        <input
+          type="checkbox"
+          :checked="store.settings.autoLaunch"
+          @change="onAutoLaunchChange"
+        />
+        Automatically sync and launch when the launcher opens
+      </label>
+    </section>
+
+    <section class="field">
       <label>Guild server URL</label>
       <div class="row">
         <input class="path" type="text" v-model="apiUrlDraft" placeholder="https://launcher-api.example.com/api" />
         <button class="btn" @click="saveApiUrl">{{ apiUrlSaved ? 'Saved' : 'Save' }}</button>
       </div>
       <p class="hint">Where the launcher fetches the addon manifest and guild news.</p>
+    </section>
+
+    <section class="field">
+      <label>Guild API Key</label>
+      <div class="row">
+        <input
+          class="path"
+          type="password"
+          v-model="apiKeyDraft"
+          placeholder="Ask an officer for the guild launcher key"
+        />
+        <button class="btn" @click="saveApiKeyValue">{{ apiKeySaved ? 'Saved' : 'Save' }}</button>
+      </div>
+      <p class="hint">Required to fetch the manifest and launcher updates. Sent as the X-API-KEY header.</p>
     </section>
   </div>
 </template>
@@ -121,5 +211,25 @@ label {
   background: var(--bg-panel);
   padding: 1px 5px;
   border-radius: 4px;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 400;
+  font-size: 13px;
+  color: var(--text);
+  margin-bottom: 10px;
+  cursor: pointer;
+}
+
+.checkbox-row input[type='checkbox'] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  flex-shrink: 0;
 }
 </style>

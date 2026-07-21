@@ -1,40 +1,14 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { store, syncNow } from '../store'
-import * as api from '../api'
+import { pendingCount as computePendingCount, playNow, store, syncNow } from '../store'
 
-const pendingCount = computed(() => {
-  if (!store.manifest || !store.lock) return 0
-  let count = 0
-  for (const addon of store.manifest.addons) {
-    const wanted =
-      addon.category === 'mandatory' ||
-      addon.category === 'recommended' ||
-      store.selectedOptional.has(addon.name)
-    if (!wanted) continue
-    const installed = store.lock.addons[addon.name]
-    if (!installed || installed.version !== addon.version || installed.sha256 !== addon.sha256) {
-      count++
-    }
-  }
-  for (const wtf of store.manifest.wtfFiles) {
-    const installed = store.lock.wtfFiles[wtf.name]
-    if (!installed || installed.version !== wtf.version || installed.sha256 !== wtf.sha256) {
-      count++
-    }
-  }
-  return count
-})
+const pendingCount = computed(computePendingCount)
 
 const canPlay = computed(() => !!store.settings.gamePath && pendingCount.value === 0 && !store.syncing)
 const canSync = computed(() => !!store.settings.gamePath && !!store.manifest && !store.syncing)
 
 async function play() {
-  try {
-    await api.launchGame()
-  } catch (e) {
-    store.syncError = String(e)
-  }
+  await playNow()
 }
 
 function statusLabel() {

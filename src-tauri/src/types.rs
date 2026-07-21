@@ -48,12 +48,23 @@ pub struct Manifest {
 pub struct Settings {
     #[serde(default)]
     pub game_path: Option<String>,
+    /// Overrides how the game is launched (e.g. a Lutris/Bottles/custom Wine
+    /// invocation). "{game_path}" is substituted with the configured game folder.
+    #[serde(default)]
+    pub launch_command: Option<String>,
+    #[serde(default)]
+    pub close_on_launch: bool,
+    #[serde(default)]
+    pub auto_launch: bool,
     #[serde(default = "default_api_base_url")]
     pub api_base_url: String,
+    /// Sent as the X-API-KEY header on manifest/update requests.
+    #[serde(default)]
+    pub api_key: Option<String>,
 }
 
 fn default_api_base_url() -> String {
-    "https://launcher-api.sotguild.example/api".to_string()
+    "https://sot.sk/api/launcher".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -64,15 +75,22 @@ pub struct LockFile {
     pub addons: std::collections::HashMap<String, LockEntry>,
     #[serde(default)]
     pub wtf_files: std::collections::HashMap<String, LockEntry>,
+    /// addon name -> whether the user wants it active. Only stores explicit
+    /// overrides; anything absent falls back to its category default
+    /// (mandatory: always on, recommended: on, optional: off).
     #[serde(default)]
-    pub optional_selected: Vec<String>,
+    pub addon_enabled: std::collections::HashMap<String, bool>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct LockEntry {
     pub version: String,
     pub sha256: String,
+    /// Top-level file/folder names this addon's zip wrote under Interface/AddOns,
+    /// so a later removal only ever deletes what this addon actually created.
+    #[serde(default)]
+    pub files: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -90,5 +108,6 @@ pub struct SyncProgress {
 pub struct SyncResult {
     pub updated: Vec<String>,
     pub skipped: Vec<String>,
+    pub removed: Vec<String>,
     pub failed: Vec<(String, String)>,
 }

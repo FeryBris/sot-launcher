@@ -20,6 +20,22 @@ export function setApiBaseUrl(url: string): Promise<Settings> {
   return invoke('set_api_base_url', { url })
 }
 
+export function setApiKey(key: string): Promise<Settings> {
+  return invoke('set_api_key', { key })
+}
+
+export function setLaunchCommand(command: string): Promise<Settings> {
+  return invoke('set_launch_command', { command })
+}
+
+export function setCloseOnLaunch(enabled: boolean): Promise<Settings> {
+  return invoke('set_close_on_launch', { enabled })
+}
+
+export function setAutoLaunch(enabled: boolean): Promise<Settings> {
+  return invoke('set_auto_launch', { enabled })
+}
+
 export function pickGameFolder(): Promise<string | null> {
   return invoke('pick_game_folder')
 }
@@ -32,8 +48,8 @@ export function getLockState(): Promise<LockFile> {
   return invoke('get_lock_state')
 }
 
-export function runSync(manifest: Manifest, selectedOptional: string[]): Promise<CombinedSyncResult> {
-  return invoke('run_sync', { manifest, selectedOptional })
+export function runSync(manifest: Manifest, addonEnabled: Record<string, boolean>): Promise<CombinedSyncResult> {
+  return invoke('run_sync', { manifest, addonEnabled })
 }
 
 export function launchGame(): Promise<void> {

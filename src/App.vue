@@ -7,7 +7,11 @@ import HomeView from './views/Home.vue'
 import AddonsView from './views/Addons.vue'
 import SettingsView from './views/Settings.vue'
 import PlayBar from './components/PlayBar.vue'
-import { init as initStore } from './store'
+import { init as initStore, playNow, store } from './store'
+
+function authHeaders(): Record<string, string> {
+  return store.settings.apiKey ? { 'X-API-KEY': store.settings.apiKey } : {}
+}
 
 type Tab = 'home' | 'addons' | 'settings'
 
@@ -22,7 +26,7 @@ const updateProgress = ref(0)
 async function checkUpdate() {
   updateState.value = 'checking'
   try {
-    const update = await checkForUpdate()
+    const update = await checkForUpdate({ headers: authHeaders() })
     if (update?.available) {
       updateAvailable.value = update
       updateState.value = 'idle'
@@ -61,8 +65,11 @@ async function installUpdate() {
 
 onMounted(async () => {
   appVersion.value = await getVersion()
+  await initStore()
   checkUpdate()
-  initStore()
+  if (store.settings.autoLaunch) {
+    playNow()
+  }
 })
 </script>
 

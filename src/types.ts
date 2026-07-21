@@ -31,18 +31,23 @@ export interface Manifest {
 
 export interface Settings {
   gamePath: string | null
+  launchCommand: string | null
+  closeOnLaunch: boolean
+  autoLaunch: boolean
   apiBaseUrl: string
+  apiKey: string | null
 }
 
 export interface LockEntry {
   version: string
   sha256: string
+  files: string[]
 }
 
 export interface LockFile {
   addons: Record<string, LockEntry>
   wtfFiles: Record<string, LockEntry>
-  optionalSelected: string[]
+  addonEnabled: Record<string, boolean>
 }
 
 export interface SyncProgress {
@@ -56,6 +61,7 @@ export interface SyncProgress {
 export interface SyncResult {
   updated: string[]
   skipped: string[]
+  removed: string[]
   failed: [string, string][]
 }
 
