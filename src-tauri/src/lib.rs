@@ -30,6 +30,15 @@ pub fn run() {
         )?;
       }
 
+      // On Windows/Linux the OS only knows to route sot-launcher:// links
+      // here if something has told it to — installers do this on a real
+      // install, but an unbundled `tauri dev` binary is never registered
+      // that way, so without this the link silently goes nowhere (no
+      // error, since the OS never hands it to the app at all).
+      if let Err(e) = app.deep_link().register_all() {
+        log::warn!("failed to register deep link scheme: {e}");
+      }
+
       let handle = app.handle().clone();
       app.deep_link().on_open_url(move |event| {
         let Some(url) = event.urls().first().cloned() else { return };
