@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head><%- include('../partials/head') %></head>
+<body>
+  <div class="shell">
+    <%- include('../partials/nav', { active: 'addons' }) %>
+    <main class="main">
+      <h1><%= addon ? 'Edit Addon' : 'New Addon' %></h1>
+
+      <form
+        class="card"
+        method="post"
+        enctype="multipart/form-data"
+        action="<%= addon ? `/admin/addons/${addon.id}?_method=PUT` : '/admin/addons' %>"
+      >
+        <div>
+          <label>Name</label>
+          <input type="text" name="name" required value="<%= addon ? addon.name : '' %>" placeholder="HealBot" />
+        </div>
+        <div>
+          <label>Version</label>
+          <input type="text" name="version" required value="<%= addon ? addon.version : '' %>" placeholder="1.4.2" />
+        </div>
+        <div>
+          <label>Category</label>
+          <select name="category" required>
+            <% ['mandatory', 'recommended', 'optional'].forEach(c => { %>
+              <option value="<%= c %>" <%= addon && addon.category === c ? 'selected' : '' %>><%= c %></option>
+            <% }) %>
+          </select>
+        </div>
+        <div>
+          <label>Changelog (optional)</label>
+          <textarea name="changelog"><%= addon ? addon.changelog : '' %></textarea>
+        </div>
+        <div>
+          <label>Addon .zip <%= addon ? '(leave empty to keep current file)' : '' %></label>
+          <input type="file" name="file" accept=".zip" <%= addon ? '' : 'required' %> />
+          <% if (addon) { %><p class="hint">Current file hash: <%= addon.sha256.slice(0, 16) %>...</p><% } %>
+          <p class="hint">Zip should contain the addon's top-level folder (e.g. HealBot/HealBot.toc).</p>
+        </div>
+        <button class="btn" type="submit"><%= addon ? 'Save Changes' : 'Publish Addon' %></button>
+      </form>
+    </main>
+  </div>
+</body>
+</html>

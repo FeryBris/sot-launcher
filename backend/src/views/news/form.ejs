@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head><%- include('../partials/head') %></head>
+<body>
+  <div class="shell">
+    <%- include('../partials/nav', { active: 'news' }) %>
+    <main class="main">
+      <h1><%= item ? 'Edit Post' : 'New Post' %></h1>
+
+      <form
+        class="card"
+        method="post"
+        action="<%= item ? `/admin/news/${item.id}?_method=PUT` : '/admin/news' %>"
+      >
+        <div>
+          <label>Title</label>
+          <input type="text" name="title" required value="<%= item ? item.title : '' %>" />
+        </div>
+        <div>
+          <label>Date</label>
+          <input type="date" name="date" required value="<%= item ? item.date : '' %>" />
+        </div>
+        <div>
+          <label>Body</label>
+          <textarea name="body" required rows="6"><%= item ? item.body : '' %></textarea>
+        </div>
+        <button class="btn" type="submit"><%= item ? 'Save Changes' : 'Publish Post' %></button>
+      </form>
+    </main>
+  </div>
+</body>
+</html>

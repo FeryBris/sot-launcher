@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head><%- include('../partials/head') %></head>
+<body>
+  <div class="shell">
+    <%- include('../partials/nav', { active: 'releases' }) %>
+    <main class="main">
+      <h1>Release <%= release.version %></h1>
+
+      <h2>Platform Artifacts</h2>
+      <% if (platforms.length === 0) { %>
+        <div class="empty">No platform artifacts uploaded yet.</div>
+      <% } else { %>
+        <table>
+          <thead><tr><th>Platform</th><th>Installer</th><th></th></tr></thead>
+          <tbody>
+            <% platforms.forEach(p => { %>
+              <tr>
+                <td><%= p.platform %></td>
+                <td><%= p.filename %></td>
+                <td class="actions">
+                  <form method="post" action="/admin/releases/<%= release.id %>/platforms/<%= p.id %>?_method=DELETE" onsubmit="return confirm('Remove <%= p.platform %> artifact?')">
+                    <button class="btn danger" type="submit">Remove</button>
+                  </form>
+                </td>
+              </tr>
+            <% }) %>
+          </tbody>
+        </table>
+      <% } %>
+
+      <% if (availablePlatforms.length > 0) { %>
+        <h2 style="margin-top: 28px">Add Platform Artifact</h2>
+        <form class="card" method="post" action="/admin/releases/<%= release.id %>/platforms" enctype="multipart/form-data">
+          <div>
+            <label>Platform</label>
+            <select name="platform" required>
+              <% availablePlatforms.forEach(p => { %><option value="<%= p %>"><%= p %></option><% }) %>
+            </select>
+          </div>
+          <div>
+            <label>Installer file</label>
+            <input type="file" name="installer" required />
+            <p class="hint">The .msi/.exe/.dmg/.AppImage produced by <code>tauri build</code>.</p>
+          </div>
+          <div>
+            <label>Signature file (.sig)</label>
+            <input type="file" name="signature_file" />
+            <p class="hint">Upload the <code>.sig</code> file next to the installer, or paste its contents below instead.</p>
+          </div>
+          <div>
+            <label>...or paste signature text</label>
+            <textarea name="signature_text" rows="3"></textarea>
+          </div>
+          <button class="btn" type="submit">Upload Artifact</button>
+        </form>
+      <% } %>
+    </main>
+  </div>
+</body>
+</html>

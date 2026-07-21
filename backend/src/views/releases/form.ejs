@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head><%- include('../partials/head') %></head>
+<body>
+  <div class="shell">
+    <%- include('../partials/nav', { active: 'releases' }) %>
+    <main class="main">
+      <h1>New Launcher Release</h1>
+
+      <form class="card" method="post" action="/admin/releases">
+        <div>
+          <label>Version</label>
+          <input type="text" name="version" required placeholder="0.2.0" />
+          <p class="hint">Must match the <code>version</code> in <code>src-tauri/tauri.conf.json</code> for that build.</p>
+        </div>
+        <div>
+          <label>Published Date</label>
+          <input type="date" name="pub_date" required value="<%= new Date().toISOString().slice(0,10) %>" />
+        </div>
+        <div>
+          <label>Release Notes (optional)</label>
+          <textarea name="notes"></textarea>
+        </div>
+        <button class="btn" type="submit">Create Release</button>
+      </form>
+    </main>
+  </div>
+</body>
+</html>

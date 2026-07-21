@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head><%- include('../partials/head') %></head>
+<body>
+  <div class="shell">
+    <%- include('../partials/nav', { active: 'news' }) %>
+    <main class="main">
+      <div class="page-header">
+        <h1>Guild News</h1>
+        <a class="btn" href="/admin/news/new">+ New Post</a>
+      </div>
+
+      <% if (items.length === 0) { %>
+        <div class="empty">No news posted yet.</div>
+      <% } else { %>
+        <table>
+          <thead>
+            <tr><th>Date</th><th>Title</th><th></th></tr>
+          </thead>
+          <tbody>
+            <% items.forEach(n => { %>
+              <tr>
+                <td><%= n.date %></td>
+                <td><%= n.title %></td>
+                <td class="actions">
+                  <a class="btn secondary" href="/admin/news/<%= n.id %>/edit">Edit</a>
+                  <form method="post" action="/admin/news/<%= n.id %>?_method=DELETE" onsubmit="return confirm('Delete this post?')">
+                    <button class="btn danger" type="submit">Delete</button>
+                  </form>
+                </td>
+              </tr>
+            <% }) %>
+          </tbody>
+        </table>
+      <% } %>
+    </main>
+  </div>
+</body>
+</html>
