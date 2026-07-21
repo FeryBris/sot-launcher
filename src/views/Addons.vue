@@ -5,13 +5,15 @@ import AddonRow from '../components/AddonRow.vue'
 
 const search = ref('')
 
+const byName = (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name)
+
 const groups = computed(() => {
   const query = search.value.trim().toLowerCase()
   const addons = (store.manifest?.addons ?? []).filter((a) => a.name.toLowerCase().includes(query))
   return {
-    mandatory: addons.filter((a) => a.category === 'mandatory'),
-    recommended: addons.filter((a) => a.category === 'recommended'),
-    optional: addons.filter((a) => a.category === 'optional'),
+    mandatory: addons.filter((a) => a.category === 'mandatory').sort(byName),
+    recommended: addons.filter((a) => a.category === 'recommended').sort(byName),
+    optional: addons.filter((a) => a.category === 'optional').sort(byName),
   }
 })
 
@@ -19,7 +21,7 @@ const customAddons = computed(() => {
   const query = search.value.trim().toLowerCase()
   return Object.values(store.installed?.addons ?? {})
     .filter((a) => a.type === 'custom' && a.name.toLowerCase().includes(query))
-    .sort((a, b) => a.name.localeCompare(b.name))
+    .sort(byName)
 })
 
 const hasResults = computed(
@@ -64,28 +66,28 @@ async function onToggleCustom(name: string, currentlyDisabled: boolean) {
 
     <template v-else>
       <section v-if="groups.mandatory.length" class="group">
-        <h2>Mandatory</h2>
+        <h2>Mandatory ({{ groups.mandatory.length }})</h2>
         <div class="list">
           <AddonRow v-for="a in groups.mandatory" :key="a.name" :addon="a" />
         </div>
       </section>
 
       <section v-if="groups.recommended.length" class="group">
-        <h2>Recommended</h2>
+        <h2>Recommended ({{ groups.recommended.length }})</h2>
         <div class="list">
           <AddonRow v-for="a in groups.recommended" :key="a.name" :addon="a" />
         </div>
       </section>
 
       <section v-if="groups.optional.length" class="group">
-        <h2>Optional</h2>
+        <h2>Optional ({{ groups.optional.length }})</h2>
         <div class="list">
           <AddonRow v-for="a in groups.optional" :key="a.name" :addon="a" />
         </div>
       </section>
 
       <section v-if="customAddons.length" class="group">
-        <h2>Custom Addons</h2>
+        <h2>Custom Addons ({{ customAddons.length }})</h2>
         <p class="custom-hint">Installed outside the guild launcher — not synced or managed here.</p>
         <div class="list">
           <div v-for="c in customAddons" :key="c.files[0]" class="custom-row" :class="{ dim: c.disabled }">
@@ -95,6 +97,7 @@ async function onToggleCustom(name: string, currentlyDisabled: boolean) {
                 <span v-if="c.disabled" class="badge off">Off</span>
               </div>
               <div v-if="c.notes" class="notes">{{ c.notes }}</div>
+              <div v-if="c.dependencies.length" class="requires">Requires: {{ c.dependencies.join(', ') }}</div>
               <div class="folder">{{ c.files[0] }}</div>
             </div>
             <div class="custom-actions">
@@ -287,6 +290,12 @@ async function onToggleCustom(name: string, currentlyDisabled: boolean) {
   color: var(--text-dim);
   margin-top: 3px;
   line-height: 1.4;
+}
+
+.custom-main .requires {
+  font-size: 10px;
+  color: var(--accent-strong);
+  margin-top: 3px;
 }
 
 .custom-main .folder {

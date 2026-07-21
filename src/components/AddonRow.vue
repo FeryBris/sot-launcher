@@ -61,6 +61,7 @@ async function onDelete() {
           <span v-if="installedVersionMismatch" class="version-diff">(installed: v{{ installed?.version }})</span>
           <span v-if="addon.changelog"> — {{ addon.changelog }}</span>
         </div>
+        <div v-if="installed?.dependencies.length" class="requires">Requires: {{ installed.dependencies.join(', ') }}</div>
       </div>
     </div>
     <div class="row-actions">
@@ -106,6 +107,12 @@ async function onDelete() {
 
 .version-diff {
   color: var(--accent-strong);
+}
+
+.requires {
+  font-size: 10px;
+  color: var(--accent-strong);
+  margin-top: 3px;
 }
 
 .row-actions {
