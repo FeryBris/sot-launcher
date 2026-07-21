@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { store } from '../store'
+import { refreshManifest, store } from '../store'
 import AddonRow from '../components/AddonRow.vue'
 
 const groups = computed(() => {
@@ -16,7 +16,12 @@ const groups = computed(() => {
 <template>
   <div class="addons">
     <div class="header">
-      <h1>Addons</h1>
+      <div class="header-top">
+        <h1>Addons</h1>
+        <button class="refresh-btn" :disabled="store.loadingManifest" @click="refreshManifest">
+          {{ store.loadingManifest ? 'Refreshing...' : 'Refresh' }}
+        </button>
+      </div>
       <p>Mandatory addons always sync. Uncheck anything else to leave it out — unchecking something already installed removes it from your AddOns folder on the next sync.</p>
     </div>
 
@@ -57,6 +62,13 @@ const groups = computed(() => {
   max-width: 760px;
 }
 
+.header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .header h1 {
   font-size: 20px;
   margin: 0 0 4px;
@@ -66,6 +78,26 @@ const groups = computed(() => {
   font-size: 12px;
   color: var(--text-dim);
   margin: 0 0 24px;
+}
+
+.refresh-btn {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius);
+  padding: 7px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.refresh-btn:hover:not(:disabled) {
+  border-color: var(--accent-dim);
+}
+
+.refresh-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 .empty {
