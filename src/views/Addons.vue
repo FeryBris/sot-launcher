@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { confirmDependentImpact, deleteAddonNow, refreshManifest, setAddonDisabledNow, store } from '../store'
+import { confirmDelete, confirmDisable, deleteAddonNow, refreshManifest, setAddonDisabledNow, store } from '../store'
 import AddonRow from '../components/AddonRow.vue'
 
 const groups = computed(() => {
@@ -19,16 +19,18 @@ const customAddons = computed(() =>
 )
 
 function onDeleteCustom(name: string) {
-  if (!confirmDependentImpact(name, 'delete')) return
-  if (confirm(`Delete ${name} completely? This can't be undone.`)) {
+  if (confirmDelete(name)) {
     deleteAddonNow(name)
   }
 }
 
 function onToggleCustom(name: string, currentlyDisabled: boolean) {
   const disabling = !currentlyDisabled
-  if (disabling && !confirmDependentImpact(name, 'disable')) return
-  setAddonDisabledNow(name, disabling)
+  if (disabling) {
+    if (confirmDisable(name)) setAddonDisabledNow(name, true)
+  } else {
+    setAddonDisabledNow(name, false) // re-enabling isn't destructive, no confirm needed
+  }
 }
 </script>
 

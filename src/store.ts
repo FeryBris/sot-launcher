@@ -126,17 +126,25 @@ export function getDependents(name: string): string[] {
   return dependents
 }
 
-/** Warns if disabling/deleting `name` would break other installed addons that
- *  depend on it. Returns true if there's nothing to warn about or the user
- *  confirmed anyway; false if they backed out. */
-export function confirmDependentImpact(name: string, action: 'disable' | 'delete'): boolean {
+function dependentWarning(name: string, verb: string): string {
   const dependents = getDependents(name)
-  if (dependents.length === 0) return true
-  const verb = action === 'delete' ? 'Deleting' : 'Disabling'
+  if (dependents.length === 0) return ''
   const plural = dependents.length === 1 ? 'requires' : 'require'
-  return confirm(
-    `${dependents.join(', ')} ${plural} "${name}" to work.\n\n${verb} it will likely break ${dependents.length === 1 ? 'that addon' : 'those addons'} in-game.\n\nContinue anyway?`,
-  )
+  const those = dependents.length === 1 ? 'that addon' : 'those addons'
+  return `\n\n${dependents.join(', ')} ${plural} "${name}" to work. ${verb} it will likely break ${those} in-game.`
+}
+
+/** One confirm dialog for a disable action: always asks, and folds in a
+ *  dependents warning when relevant instead of showing a second popup. */
+export function confirmDisable(name: string): boolean {
+  const message = `Disable ${name}?${dependentWarning(name, 'Disabling')}\n\nIt will move to Interface/.DisabledAddons - you can re-enable it later.`
+  return confirm(message)
+}
+
+/** One confirm dialog for a permanent delete action. */
+export function confirmDelete(name: string): boolean {
+  const message = `Delete ${name} completely?${dependentWarning(name, 'Deleting')}\n\nThis can't be undone - you'd need to sync it again to get it back.`
+  return confirm(message)
 }
 
 /** Immediate disable/enable for one addon (managed or custom) - moves its folder
