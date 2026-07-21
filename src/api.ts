@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { open } from '@tauri-apps/plugin-shell'
 import type {
   CombinedSyncResult,
   InstalledState,
@@ -66,4 +67,28 @@ export function launchGame(): Promise<void> {
 
 export function onSyncProgress(handler: (p: SyncProgress) => void): Promise<UnlistenFn> {
   return listen<SyncProgress>('sync-progress', (event) => handler(event.payload))
+}
+
+/** Opens the guild site's Discord sign-in page in the system browser. */
+export function startDiscordLogin(apiBaseUrl: string): Promise<void> {
+  const site = new URL(apiBaseUrl)
+  site.pathname = '/launcher/connect'
+  site.search = ''
+  return open(site.toString())
+}
+
+export function pairWithCode(code: string): Promise<Settings> {
+  return invoke('pair_with_code', { code })
+}
+
+export function clearDiscordLogin(): Promise<Settings> {
+  return invoke('clear_discord_login')
+}
+
+export function onDiscordPaired(handler: (s: Settings) => void): Promise<UnlistenFn> {
+  return listen<Settings>('discord-paired', (event) => handler(event.payload))
+}
+
+export function onDiscordPairError(handler: (message: string) => void): Promise<UnlistenFn> {
+  return listen<string>('discord-pair-error', (event) => handler(event.payload))
 }

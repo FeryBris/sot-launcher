@@ -20,11 +20,23 @@ interface Store {
   syncing: boolean
   syncProgress: SyncProgress | null
   syncError: string
+  discordError: string
   loaded: boolean
 }
 
 export const store = reactive<Store>({
-  settings: { gamePath: null, launchCommand: null, closeOnLaunch: false, autoLaunch: false, apiBaseUrl: '', apiKey: null, addonEnabled: {} },
+  settings: {
+    gamePath: null,
+    launchCommand: null,
+    closeOnLaunch: false,
+    autoLaunch: false,
+    apiBaseUrl: '',
+    apiKey: null,
+    addonEnabled: {},
+    discordToken: null,
+    discordUsername: null,
+    discordAvatar: null,
+  },
   manifest: null,
   installed: null,
   addonEnabled: {},
@@ -33,6 +45,7 @@ export const store = reactive<Store>({
   syncing: false,
   syncProgress: null,
   syncError: '',
+  discordError: '',
   loaded: false,
 })
 
@@ -57,6 +70,8 @@ export function answerConfirm(value: boolean) {
 }
 
 let progressUnlisten: (() => void) | null = null
+let discordPairedUnlisten: (() => void) | null = null
+let discordPairErrorUnlisten: (() => void) | null = null
 
 export async function init() {
   if (store.loaded) return
@@ -68,8 +83,38 @@ export async function init() {
     store.syncProgress = p
   })
 
+  // The OS hands sot-launcher://pair?code=... to the Rust side, not directly
+  // to this webview, so the exchanged result arrives here as an event
+  // instead of a normal invoke() response.
+  discordPairedUnlisten = await api.onDiscordPaired((s) => {
+    store.settings = s
+    store.discordError = ''
+  })
+  discordPairErrorUnlisten = await api.onDiscordPairError((message) => {
+    store.discordError = message
+  })
+
   if (store.settings.apiBaseUrl) {
     await refreshManifest()
+  }
+}
+
+/** Opens the guild site's Discord sign-in in the system browser; the result
+ *  comes back asynchronously via the discord-paired event, not this call. */
+export async function signInWithDiscord() {
+  store.discordError = ''
+  try {
+    await api.startDiscordLogin(store.settings.apiBaseUrl)
+  } catch (e) {
+    store.discordError = String(e)
+  }
+}
+
+export async function signOutDiscord() {
+  try {
+    store.settings = await api.clearDiscordLogin()
+  } catch (e) {
+    store.discordError = String(e)
   }
 }
 
@@ -248,4 +293,6 @@ export async function playNow() {
 
 export function disposeStore() {
   progressUnlisten?.()
+  discordPairedUnlisten?.()
+  discordPairErrorUnlisten?.()
 }

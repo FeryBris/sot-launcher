@@ -37,6 +37,9 @@ export interface Settings {
   apiBaseUrl: string
   apiKey: string | null
   addonEnabled: Record<string, boolean>
+  discordToken: string | null
+  discordUsername: string | null
+  discordAvatar: string | null
 }
 
 export interface AddonStateEntry {

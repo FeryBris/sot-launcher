@@ -153,6 +153,81 @@ pub fn delete_addon(app: AppHandle, manifest: Manifest, name: String) -> Result<
     Ok(sync::get_installed_state(&game_path, &manifest))
 }
 
+#[derive(serde::Deserialize)]
+struct PairResponse {
+    token: String,
+    user: PairUser,
+}
+
+#[derive(serde::Deserialize)]
+struct PairUser {
+    #[serde(rename = "discordUsername")]
+    discord_username: Option<String>,
+    #[serde(rename = "discordAvatar")]
+    discord_avatar: Option<String>,
+}
+
+/// Exchanges a one-time pairing code (from the sot-launcher://pair deep
+/// link) for a personal API token. Shared by the pair_with_code command and
+/// the deep-link handler in lib.rs, since the OS can deliver the URL either
+/// way depending on whether the app was already running.
+pub async fn exchange_pair_code(
+    app: &AppHandle,
+    http: &reqwest::Client,
+    code: String,
+) -> Result<Settings, String> {
+    let mut s = settings::load_settings(app)?;
+    let url = format!("{}/pair", s.api_base_url.trim_end_matches('/'));
+    let resp = http
+        .post(&url)
+        .header("Accept", "application/json")
+        .json(&serde_json::json!({ "code": code }))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {} while pairing", resp.status()));
+    }
+
+    let body: PairResponse = resp.json().await.map_err(|e| e.to_string())?;
+
+    s.discord_token = Some(body.token);
+    s.discord_username = body.user.discord_username;
+    s.discord_avatar = body.user.discord_avatar;
+    settings::save_settings(app, &s)?;
+    Ok(s)
+}
+
+#[tauri::command]
+pub async fn pair_with_code(app: AppHandle, state: State<'_, AppState>, code: String) -> Result<Settings, String> {
+    exchange_pair_code(&app, &state.http, code).await
+}
+
+/// Best-effort server-side revoke, then always clears the local credential
+/// regardless of whether the server call succeeded (e.g. offline).
+#[tauri::command]
+pub async fn clear_discord_login(app: AppHandle, state: State<'_, AppState>) -> Result<Settings, String> {
+    let mut s = settings::load_settings(&app)?;
+
+    if let Some(token) = s.discord_token.as_deref().filter(|t| !t.is_empty()) {
+        let url = format!("{}/unpair", s.api_base_url.trim_end_matches('/'));
+        let _ = state
+            .http
+            .post(&url)
+            .header("Accept", "application/json")
+            .bearer_auth(token)
+            .send()
+            .await;
+    }
+
+    s.discord_token = None;
+    s.discord_username = None;
+    s.discord_avatar = None;
+    settings::save_settings(&app, &s)?;
+    Ok(s)
+}
+
 #[tauri::command]
 pub async fn run_sync(
     app: AppHandle,

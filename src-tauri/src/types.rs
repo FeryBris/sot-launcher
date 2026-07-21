@@ -68,6 +68,14 @@ pub struct Settings {
     /// than being derived from the game folder like everything else.
     #[serde(default)]
     pub addon_enabled: std::collections::HashMap<String, bool>,
+    /// Personal Bearer token from Discord pairing, sent on requests that
+    /// need per-player identity (distinct from the shared api_key above).
+    #[serde(default)]
+    pub discord_token: Option<String>,
+    #[serde(default)]
+    pub discord_username: Option<String>,
+    #[serde(default)]
+    pub discord_avatar: Option<String>,
 }
 
 fn default_api_base_url() -> String {

@@ -1,6 +1,16 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import { store, saveApiBaseUrl, saveApiKey, saveAutoLaunch, saveCloseOnLaunch, saveGamePath, saveLaunchCommand } from '../store'
+import {
+  store,
+  saveApiBaseUrl,
+  saveApiKey,
+  saveAutoLaunch,
+  saveCloseOnLaunch,
+  saveGamePath,
+  saveLaunchCommand,
+  signInWithDiscord,
+  signOutDiscord,
+} from '../store'
 import * as api from '../api'
 
 const apiUrlDraft = ref(store.settings.apiBaseUrl)
@@ -138,6 +148,20 @@ async function onAutoLaunchChange(e: Event) {
       </div>
       <p class="hint">Required to fetch the manifest and launcher updates. Sent as the X-API-KEY header.</p>
     </section>
+
+    <section class="field">
+      <label>Discord Account</label>
+      <div v-if="store.settings.discordToken" class="row discord-row">
+        <img v-if="store.settings.discordAvatar" class="avatar" :src="store.settings.discordAvatar" alt="" />
+        <span class="discord-name">Connected as {{ store.settings.discordUsername }}</span>
+        <button class="btn" @click="signOutDiscord">Disconnect</button>
+      </div>
+      <div v-else class="row">
+        <button class="btn accent" @click="signInWithDiscord">Sign in with Discord</button>
+      </div>
+      <p v-if="store.discordError" class="hint error">{{ store.discordError }}</p>
+      <p class="hint">Links your Discord identity so your WTF folder can sync across devices.</p>
+    </section>
   </div>
 </template>
 
@@ -211,6 +235,37 @@ label {
   background: var(--bg-panel);
   padding: 1px 5px;
   border-radius: 4px;
+}
+
+.hint.error {
+  color: var(--danger);
+}
+
+.btn.accent {
+  background: var(--accent);
+  color: #062028;
+  border-color: var(--accent);
+}
+
+.btn.accent:hover {
+  border-color: var(--accent-strong);
+}
+
+.discord-row {
+  align-items: center;
+}
+
+.avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.discord-name {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text);
 }
 
 .checkbox-row {

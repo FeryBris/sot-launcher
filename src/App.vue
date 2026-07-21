@@ -104,6 +104,9 @@ onMounted(async () => {
         <div v-else-if="updateState === 'error'" class="update-error" :title="updateError">
           Update check failed
         </div>
+        <div v-if="store.settings.discordUsername" class="discord-status">
+          Signed in as {{ store.settings.discordUsername }}
+        </div>
         <div class="version">v{{ appVersion }}</div>
       </div>
     </aside>
@@ -233,6 +236,12 @@ onMounted(async () => {
 .update-error {
   font-size: 11px;
   color: var(--text-dim);
+}
+
+.discord-status {
+  font-size: 11px;
+  color: var(--accent-strong);
+  text-align: center;
 }
 
 .version {
