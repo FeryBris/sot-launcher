@@ -8,5 +8,12 @@ export default defineConfig({
   server: {
     port: 5174,
     strictPort: true,
+    watch: {
+      // Never watch the Rust build output — cargo/tauri already watches
+      // src-tauri's *source*, and target/ (especially an AppImage bundle's
+      // copied system libraries) can contain enough files to blow past
+      // Linux's inotify watch limit on its own.
+      ignored: ['**/src-tauri/**'],
+    },
   },
 })
