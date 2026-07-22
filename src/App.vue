@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { onMounted, ref, shallowRef, watch } from 'vue'
 import { check as checkForUpdate, type Update } from '@tauri-apps/plugin-updater'
 import { relaunch } from '@tauri-apps/plugin-process'
 import { getVersion } from '@tauri-apps/api/app'
@@ -19,7 +19,7 @@ type Tab = 'home' | 'addons' | 'settings'
 const tab = ref<Tab>('home')
 const appVersion = ref('')
 
-const updateAvailable = ref<Update | null>(null)
+const updateAvailable = shallowRef<Update | null>(null)
 const updateState = ref<'idle' | 'checking' | 'downloading' | 'ready' | 'error'>('idle')
 const updateError = ref('')
 const updateProgress = ref(0)
@@ -35,6 +35,7 @@ async function checkUpdate() {
       updateState.value = 'idle'
     }
   } catch (e) {
+    console.error('[updater] check failed:', e)
     updateState.value = 'error'
     updateError.value = String(e)
   }
@@ -59,6 +60,7 @@ async function installUpdate() {
     updateState.value = 'ready'
     await relaunch()
   } catch (e) {
+    console.error('[updater] install failed:', e)
     updateState.value = 'error'
     updateError.value = String(e)
   }
@@ -108,6 +110,9 @@ onMounted(async () => {
           >
             {{ updateState === 'downloading' ? `Updating ${updateProgress}%` : 'Update & Restart' }}
           </button>
+          <div v-if="updateState === 'error'" class="update-install-error" :title="updateError">
+            Update failed — try again
+          </div>
         </div>
         <div v-else-if="updateState === 'error'" class="update-error" :title="updateError">
           Update check failed
@@ -247,6 +252,12 @@ onMounted(async () => {
 .update-error {
   font-size: 11px;
   color: var(--text-dim);
+}
+
+.update-install-error {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--danger);
 }
 
 .manifest-error {
