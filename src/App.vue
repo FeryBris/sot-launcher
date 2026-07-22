@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { check as checkForUpdate, type Update } from '@tauri-apps/plugin-updater'
 import { relaunch } from '@tauri-apps/plugin-process'
 import { getVersion } from '@tauri-apps/api/app'
@@ -68,6 +68,14 @@ onMounted(async () => {
   appVersion.value = await getVersion()
   await initStore()
   checkUpdate()
+
+  // Registered only after the initial load+check above has already run, so
+  // it can't also fire for that same first settings load (store.settings
+  // goes from its empty default to the real loaded value once here) — only
+  // for genuine later changes (Settings save, Discord pairing, etc.),
+  // instead of leaving a stale error/result sitting there until restart.
+  watch(() => store.settings.apiKey, () => checkUpdate())
+
   if (store.settings.autoLaunch) {
     playNow()
   }
@@ -103,6 +111,9 @@ onMounted(async () => {
         </div>
         <div v-else-if="updateState === 'error'" class="update-error" :title="updateError">
           Update check failed
+        </div>
+        <div v-if="store.manifestError" class="manifest-error" :title="store.manifestError">
+          Guild server error — check Settings
         </div>
         <div v-if="store.settings.discordUsername" class="discord-status">
           Signed in as {{ store.settings.discordUsername }}
@@ -236,6 +247,17 @@ onMounted(async () => {
 .update-error {
   font-size: 11px;
   color: var(--text-dim);
+}
+
+.manifest-error {
+  background: var(--bg-panel);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  padding: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--danger);
+  text-align: center;
 }
 
 .discord-status {
