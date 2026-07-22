@@ -2,7 +2,7 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "SoTLauncher",
   "mainBinaryName": "sotlauncher",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "identifier": "gg.sotlauncher",
   "build": {
     "frontendDist": "../dist",
@@ -44,17 +44,13 @@
   "plugins": {
     "updater": {
       "active": true,
-      "endpoints": [
-        "https://sot.sk/api/launcher/latest.json"
-      ],
+      "endpoints": ["https://sot.sk/api/launcher/latest.json"],
       "dialog": false,
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDM3M0JENTA2NThGMzFBMEMKUldRTUd2TllCdFU3Ti9oaFh5VkRXaUdBRFBkWkVleUpOQU1kQ0p0eWprOGk0YXBlUURPQkpzSEYK"
     },
     "deep-link": {
       "desktop": {
-        "schemes": [
-          "sot-launcher"
-        ]
+        "schemes": ["sot-launcher"]
       }
     }
   }

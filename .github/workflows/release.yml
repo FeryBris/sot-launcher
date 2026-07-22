@@ -1,4 +1,4 @@
-name: Release Windows build
+name: Release
 
 on:
   push:
@@ -10,7 +10,15 @@ jobs:
   release:
     permissions:
       contents: write
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+          # 22.04, not -latest, so the AppImage links against an older
+          # glibc and still runs on end-user distros that haven't caught up.
+          - platform: ubuntu-22.04
+    runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
 
@@ -22,6 +30,21 @@ jobs:
           cache: 'pnpm'
 
       - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            build-essential \
+            libssl-dev \
+            curl \
+            wget \
+            file
 
       - name: Install frontend dependencies
         run: pnpm install
