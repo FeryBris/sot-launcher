@@ -79,7 +79,7 @@ onMounted(async () => {
     <aside class="sidebar">
       <div class="brand">
         <span class="brand-mark">SoT</span>
-        <span class="brand-name">Guild Launcher</span>
+        <span class="brand-name">Launcher</span>
       </div>
 
       <nav class="nav">

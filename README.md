@@ -1,4 +1,4 @@
-# SoT Guild Launcher
+# SoT Launcher
 
 Desktop launcher for the guild: syncs mandatory/recommended/optional addons
 and WTF/SavedVariables files from the guild server, self-updates, and

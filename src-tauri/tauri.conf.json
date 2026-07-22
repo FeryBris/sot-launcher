@@ -1,8 +1,9 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "SoTGuildLauncher",
-  "version": "0.1.0",
-  "identifier": "gg.sotguild.launcher",
+  "productName": "SoTLauncher",
+  "mainBinaryName": "sotlauncher",
+  "version": "0.1.1",
+  "identifier": "gg.sotlauncher",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5174",
@@ -12,7 +13,7 @@
   "app": {
     "windows": [
       {
-        "title": "SoT Guild Launcher",
+        "title": "SoT Launcher",
         "width": 980,
         "height": 640,
         "minWidth": 860,

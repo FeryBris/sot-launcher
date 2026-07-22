@@ -32,7 +32,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         with:
           tagName: app-v__VERSION__
-          releaseName: 'SoT Guild Launcher v__VERSION__'
+          releaseName: 'SoT Launcher v__VERSION__'
           releaseBody: 'See the assets below to download this version.'
           releaseDraft: true
           prerelease: false

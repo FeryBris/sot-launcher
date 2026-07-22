@@ -1,4 +1,4 @@
-# SoT Guild Launcher — Backend
+# SoT Launcher — Backend
 
 Express + SQLite server that hosts the addon/WTF manifest, guild news, and
 launcher self-update feed, plus an admin panel to manage all of it.
