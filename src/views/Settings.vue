@@ -12,6 +12,7 @@ import {
   signOutDiscord,
 } from '../store'
 import * as api from '../api'
+import type { LutrisGame } from '../types'
 
 const apiUrlDraft = ref(store.settings.apiBaseUrl)
 const apiUrlSaved = ref(false)
@@ -19,6 +20,10 @@ const apiKeyDraft = ref(store.settings.apiKey ?? '')
 const apiKeySaved = ref(false)
 const launchCmdDraft = ref(store.settings.launchCommand ?? '')
 const launchCmdSaved = ref(false)
+
+const lutrisGames = ref<LutrisGame[]>([])
+const lutrisLoading = ref(false)
+const lutrisError = ref('')
 
 watch(
   () => store.settings.apiBaseUrl,
@@ -66,6 +71,27 @@ async function saveLaunchCmd() {
   setTimeout(() => (launchCmdSaved.value = false), 1500)
 }
 
+async function detectLutrisGames() {
+  lutrisLoading.value = true
+  lutrisError.value = ''
+  lutrisGames.value = []
+  try {
+    lutrisGames.value = await api.listLutrisGames()
+    if (lutrisGames.value.length === 0) {
+      lutrisError.value = 'Lutris is installed, but its library is empty.'
+    }
+  } catch (e) {
+    lutrisError.value = String(e)
+  } finally {
+    lutrisLoading.value = false
+  }
+}
+
+function pickLutrisGame(game: LutrisGame) {
+  launchCmdDraft.value = game.launchCommand
+  lutrisGames.value = []
+}
+
 async function onCloseOnLaunchChange(e: Event) {
   await saveCloseOnLaunch((e.target as HTMLInputElement).checked)
 }
@@ -101,9 +127,25 @@ async function onAutoLaunchChange(e: Event) {
       </div>
       <p class="hint">
         Leave empty to auto-detect and launch <code>Wow.exe</code> directly (via Wine on Linux/macOS).
-        If you play through Lutris, Bottles, CrossOver, or a custom Wine prefix, put that launch
-        command here instead &mdash; <code>{game_path}</code> is replaced with the folder above.
+        If you play through Lutris, click "Detect Lutris games" below to pick yours instead of typing
+        a command by hand. Bottles/CrossOver/custom Wine prefixes still need to be entered manually
+        &mdash; <code>{game_path}</code> is replaced with the folder above.
       </p>
+
+      <div class="row lutris-row">
+        <button class="btn" :disabled="lutrisLoading" @click="detectLutrisGames">
+          {{ lutrisLoading ? 'Looking for Lutris…' : 'Detect Lutris games' }}
+        </button>
+      </div>
+      <p v-if="lutrisError" class="hint error">{{ lutrisError }}</p>
+      <ul v-if="lutrisGames.length" class="lutris-list">
+        <li v-for="game in lutrisGames" :key="game.id">
+          <button class="lutris-game" @click="pickLutrisGame(game)">
+            {{ game.name }}
+            <span class="lutris-runner">{{ game.runner }}</span>
+          </button>
+        </li>
+      </ul>
     </section>
 
     <section class="field">
@@ -239,6 +281,46 @@ label {
 
 .hint.error {
   color: var(--danger);
+}
+
+.lutris-row {
+  margin-top: 10px;
+}
+
+.lutris-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.lutris-game {
+  width: 100%;
+  text-align: left;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  font-size: 13px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.lutris-game:hover {
+  border-color: var(--accent-dim);
+}
+
+.lutris-runner {
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .btn.accent {

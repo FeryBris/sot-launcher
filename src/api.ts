@@ -4,6 +4,7 @@ import { open } from '@tauri-apps/plugin-shell'
 import type {
   CombinedSyncResult,
   InstalledState,
+  LutrisGame,
   Manifest,
   Settings,
   SyncProgress,
@@ -63,6 +64,10 @@ export function runSync(manifest: Manifest, addonEnabled: Record<string, boolean
 
 export function launchGame(): Promise<void> {
   return invoke('launch_game')
+}
+
+export function listLutrisGames(): Promise<LutrisGame[]> {
+  return invoke('list_lutris_games')
 }
 
 export function onSyncProgress(handler: (p: SyncProgress) => void): Promise<UnlistenFn> {

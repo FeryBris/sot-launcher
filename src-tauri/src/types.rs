@@ -157,3 +157,17 @@ pub struct SyncResult {
     pub removed: Vec<String>,
     pub failed: Vec<(String, String)>,
 }
+
+/// One game from Lutris's own library (native or Flatpak install), with a
+/// ready-to-save launch_command already built for it — the Settings UI
+/// just needs to display `name` and save `launch_command` verbatim, no
+/// native-vs-Flatpak or slug-vs-id logic on the frontend.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LutrisGame {
+    pub id: u64,
+    pub slug: String,
+    pub name: String,
+    pub runner: String,
+    pub launch_command: String,
+}

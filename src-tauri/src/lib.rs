@@ -82,6 +82,7 @@ pub fn run() {
       commands::launch_game,
       commands::pair_with_code,
       commands::clear_discord_login,
+      commands::list_lutris_games,
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

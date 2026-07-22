@@ -84,3 +84,11 @@ export interface CombinedSyncResult {
   addons: SyncResult
   wtfFiles: SyncResult
 }
+
+export interface LutrisGame {
+  id: number
+  slug: string
+  name: string
+  runner: string
+  launchCommand: string
+}

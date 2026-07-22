@@ -342,3 +342,101 @@ fn run_shell_command(command: &str, cwd: &Path) -> Result<(), String> {
         .map_err(|e| format!("failed to run custom launch command: {e}"))?;
     Ok(())
 }
+
+/// Flatpak's app ID for Lutris, used both to detect a Flatpak install and to
+/// build the `flatpak run` prefix for launch commands.
+const LUTRIS_FLATPAK_ID: &str = "net.lutris.Lutris";
+const LUTRIS_LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// Runs `cmd`, polling instead of a plain blocking wait so a Lutris that
+/// hangs on first-run setup (Flatpak permission prompts, etc.) can't freeze
+/// the app indefinitely - it's killed and reported as a timeout instead.
+/// Returns a plain io::Error (not yet stringified) so the caller can tell a
+/// missing binary (NotFound, to fall back to Flatpak) apart from any other
+/// failure.
+fn run_with_timeout(mut cmd: std::process::Command, timeout: std::time::Duration) -> std::io::Result<std::process::Output> {
+    use std::process::Stdio;
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = cmd.spawn()?;
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait()? {
+            Some(_) => break,
+            None => {
+                if start.elapsed() > timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "timed out waiting for Lutris"));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(150));
+            }
+        }
+    }
+    child.wait_with_output()
+}
+
+#[derive(serde::Deserialize)]
+struct RawLutrisGame {
+    id: u64,
+    slug: String,
+    name: String,
+    runner: String,
+}
+
+/// Lists games from Lutris's own library (tries a native `lutris` binary
+/// first, then the Flatpak), building a ready-to-save launch command for
+/// each so Settings can offer a picker instead of asking the user to find
+/// and type a Lutris URI by hand.
+#[tauri::command]
+pub fn list_lutris_games() -> Result<Vec<crate::types::LutrisGame>, String> {
+    let mut native_cmd = std::process::Command::new("lutris");
+    native_cmd.args(["--list-games", "--json"]);
+
+    let (output, prefix) = match run_with_timeout(native_cmd, LUTRIS_LIST_TIMEOUT) {
+        Ok(output) => (output, String::new()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let mut flatpak_cmd = std::process::Command::new("flatpak");
+            flatpak_cmd.args(["run", LUTRIS_FLATPAK_ID, "--list-games", "--json"]);
+            let output = run_with_timeout(flatpak_cmd, LUTRIS_LIST_TIMEOUT).map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    "Lutris wasn't found — checked for a native `lutris` command and the \
+                     net.lutris.Lutris Flatpak. Enter your launch command manually instead."
+                        .to_string()
+                } else {
+                    format!("couldn't run Lutris: {e}")
+                }
+            })?;
+            (output, format!("flatpak run {LUTRIS_FLATPAK_ID} "))
+        }
+        Err(e) => return Err(format!("couldn't run Lutris: {e}")),
+    };
+
+    if !output.status.success() {
+        return Err(format!(
+            "lutris --list-games failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if stdout.trim().is_empty() {
+        return Err(
+            "Lutris returned no game list — if Lutris is already open, close it and try again."
+                .to_string(),
+        );
+    }
+
+    let raw: Vec<RawLutrisGame> = serde_json::from_str(stdout.trim())
+        .map_err(|e| format!("couldn't parse Lutris's game list: {e}"))?;
+
+    Ok(raw
+        .into_iter()
+        .map(|g| crate::types::LutrisGame {
+            launch_command: format!("{prefix}lutris:rungameid/{}", g.id),
+            id: g.id,
+            slug: g.slug,
+            name: g.name,
+            runner: g.runner,
+        })
+        .collect())
+}
