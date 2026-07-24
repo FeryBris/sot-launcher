@@ -8,7 +8,7 @@ import AddonsView from './views/Addons.vue'
 import SettingsView from './views/Settings.vue'
 import PlayBar from './components/PlayBar.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
-import { init as initStore, playNow, store } from './store'
+import { init as initStore, playNow, signInWithDiscord, store } from './store'
 
 function authHeaders(): Record<string, string> {
   return store.settings.apiKey ? { 'X-API-KEY': store.settings.apiKey } : {}
@@ -120,9 +120,11 @@ onMounted(async () => {
         <div v-if="store.manifestError" class="manifest-error" :title="store.manifestError">
           Guild server error — check Settings
         </div>
-        <div v-if="store.settings.discordUsername" class="discord-status">
-          Signed in as {{ store.settings.discordUsername }}
+        <div v-if="store.settings.discordToken" class="discord-status">
+          <img v-if="store.settings.discordAvatar" class="discord-avatar" :src="store.settings.discordAvatar" alt="" />
+          <span class="discord-name">{{ store.settings.discordUsername }}</span>
         </div>
+        <button v-else class="discord-signin-btn" @click="signInWithDiscord">Sign in</button>
         <div class="version">v{{ appVersion }}</div>
       </div>
     </aside>
@@ -272,9 +274,35 @@ onMounted(async () => {
 }
 
 .discord-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.discord-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.discord-name {
   font-size: 11px;
   color: var(--accent-strong);
-  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.discord-signin-btn {
+  background: var(--accent);
+  color: #062028;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .version {
