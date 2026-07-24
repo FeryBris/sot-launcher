@@ -25,6 +25,21 @@ function qualityColor(quality: string | null): string {
   return (quality && QUALITY_COLOR[quality]) || '#c9cdd6'
 }
 
+// Same colors as the website's _Typography.module.scss response classes
+// (.Response-BIS/-Mainspec/-Offspec/-Small), sourced from its own
+// class/quality color palette (rogue/uncommon/druid/heirloom) — matches
+// MyLootController::INCLUDED_RESPONSES exactly, the only 4 values that
+// can ever appear here.
+const RESPONSE_COLOR: Record<string, string> = {
+  'BIS/Need': '#fff468',
+  'Mainspec/Need': '#1eff00',
+  'Offspec/Greed': '#ff7c0a',
+  'Small Upgrade but not BiS': '#00ccff',
+}
+function responseColor(name: string | null): string | undefined {
+  return (name && RESPONSE_COLOR[name]) || undefined
+}
+
 // Same abbreviation -> image convention as the website's own
 // InstancePortrait.vue/_Portrait.module.scss.
 const INSTANCE_IMAGE: Record<string, string> = {
@@ -120,8 +135,11 @@ const activeInstance = computed<MyLootInstance | null>(
                 {{ loot.item.name }}
               </span>
               <span class="loot-sub">
-                <template v-if="loot.item.level">ilvl {{ loot.item.level }}</template>
-                <template v-if="loot.response?.name"> · {{ loot.response.name }}</template>
+                <span v-if="loot.item.level" class="loot-ilvl">ilvl {{ loot.item.level }}</span>
+                <template v-if="loot.response?.name">
+                  ·
+                  <span :style="{ color: responseColor(loot.response.name) }">{{ loot.response.name }}</span>
+                </template>
               </span>
             </div>
             <div v-if="loot.count > 1" class="loot-count" title="Times looted">×{{ loot.count }}</div>
@@ -317,6 +335,10 @@ const activeInstance = computed<MyLootInstance | null>(
 
 .loot-sub {
   font-size: 11px;
+  color: var(--text-dim);
+}
+
+.loot-ilvl {
   color: var(--text-dim);
 }
 
