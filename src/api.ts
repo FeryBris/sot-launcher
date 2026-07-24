@@ -103,6 +103,12 @@ export function onSyncProgress(handler: (p: SyncProgress) => void): Promise<Unli
   return listen<SyncProgress>('sync-progress', (event) => handler(event.payload))
 }
 
+/** Fires whenever SoTGuildSync.lua or GuildExport.lua actually changes on
+ *  disk (see src-tauri/src/watcher.rs) — replaces polling on a timer. */
+export function onGuildDataChanged(handler: () => void): Promise<UnlistenFn> {
+  return listen('guild-data-changed', () => handler())
+}
+
 /** Opens the guild site's Discord sign-in page in the system browser. */
 export function startDiscordLogin(apiBaseUrl: string): Promise<void> {
   const site = new URL(apiBaseUrl)

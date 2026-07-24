@@ -113,22 +113,7 @@ export function answerConfirm(value: boolean) {
 let progressUnlisten: (() => void) | null = null
 let discordPairedUnlisten: (() => void) | null = null
 let discordPairErrorUnlisten: (() => void) | null = null
-
-const GUILD_SYNC_POLL_INTERVAL_MS = 5000
-let guildSyncPollHandle: ReturnType<typeof setInterval> | null = null
-
-/** Keeps the "My Characters" list current while the launcher's open —
- *  SoTGuildSyncDB.lua only ever changes on WoW-side events (login, logout,
- *  gear/gold changes), not while the launcher itself is doing anything, so
- *  there's no other trigger to notice a change without this. Runs for the
- *  life of the app; never stopped, same as the other event listeners below. */
-function startGuildSyncPolling() {
-  if (guildSyncPollHandle) return
-  guildSyncPollHandle = setInterval(() => {
-    void refreshGuildSyncData().then(() => maybeAutoSyncGuildData())
-    void refreshGuildRoster().then(() => maybeAutoSyncGuildRoster())
-  }, GUILD_SYNC_POLL_INTERVAL_MS)
-}
+let guildDataChangedUnlisten: (() => void) | null = null
 
 const AUTO_SYNC_DEBOUNCE_MS = 60_000
 let lastAutoSyncSnapshot = ''
@@ -196,12 +181,20 @@ export async function init() {
     store.discordError = message
   })
 
+  // Rust watches SoTGuildSync.lua/GuildExport.lua directly (see
+  // src-tauri/src/watcher.rs) and emits this the moment either actually
+  // changes — no need to poll on a timer for something that only ever
+  // changes on real WoW-side events.
+  guildDataChangedUnlisten = await api.onGuildDataChanged(() => {
+    void refreshGuildSyncData().then(() => maybeAutoSyncGuildData())
+    void refreshGuildRoster().then(() => maybeAutoSyncGuildRoster())
+  })
+
   await refreshManifest()
   await refreshGuildSyncData()
   void maybeAutoSyncGuildData()
   await refreshGuildRoster()
   void maybeAutoSyncGuildRoster()
-  startGuildSyncPolling()
   void refreshMyLoot()
 }
 
@@ -490,4 +483,5 @@ export function disposeStore() {
   progressUnlisten?.()
   discordPairedUnlisten?.()
   discordPairErrorUnlisten?.()
+  guildDataChangedUnlisten?.()
 }

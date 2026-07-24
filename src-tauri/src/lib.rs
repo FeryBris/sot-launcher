@@ -5,6 +5,7 @@ mod guild_sync;
 mod settings;
 mod sync;
 mod types;
+mod watcher;
 
 use commands::AppState;
 use tauri::menu::{Menu, MenuItem};
@@ -51,6 +52,16 @@ pub fn run() {
             .level(log::LevelFilter::Info)
             .build(),
         )?;
+      }
+
+      // Starts watching the SavedVariables files for changes (see
+      // watcher.rs) instead of the frontend polling on a timer. If no
+      // game folder is configured yet, this is a no-op — set_game_path_*
+      // starts it once the player actually picks one.
+      if let Ok(s) = settings::load_settings(app.handle()) {
+        if let Some(path) = s.game_path() {
+          watcher::watch_guild_data(app.handle(), std::path::Path::new(&path));
+        }
       }
 
       // On Windows/Linux the OS only knows to route sot-launcher:// links

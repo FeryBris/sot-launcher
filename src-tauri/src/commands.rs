@@ -18,6 +18,10 @@ pub struct AppState {
     /// `.setup()` in lib.rs, mutated later via `set_tray_primary_label`
     /// whenever the frontend's update-available state changes.
     pub tray_primary_item: std::sync::Mutex<Option<tauri::menu::MenuItem<tauri::Wry>>>,
+    /// The active SavedVariables watcher (see watcher.rs) — held here so
+    /// `set_game_path_windows`/`set_game_path_linux` can replace it (which
+    /// drops and stops the old one) when the watched folder changes.
+    pub guild_watcher: std::sync::Mutex<Option<notify::RecommendedWatcher>>,
 }
 
 impl Default for AppState {
@@ -25,6 +29,7 @@ impl Default for AppState {
         Self {
             http: reqwest::Client::new(),
             tray_primary_item: std::sync::Mutex::new(None),
+            guild_watcher: std::sync::Mutex::new(None),
         }
     }
 }
@@ -51,6 +56,9 @@ pub fn set_game_path_windows(app: AppHandle, path: String) -> Result<Settings, S
     let mut s = settings::load_settings(&app)?;
     s.game_path_windows = Some(path);
     settings::save_settings(&app, &s)?;
+    if let Some(current) = s.game_path() {
+        crate::watcher::watch_guild_data(&app, Path::new(&current));
+    }
     Ok(s)
 }
 
@@ -59,6 +67,9 @@ pub fn set_game_path_linux(app: AppHandle, path: String) -> Result<Settings, Str
     let mut s = settings::load_settings(&app)?;
     s.game_path_linux = Some(path);
     settings::save_settings(&app, &s)?;
+    if let Some(current) = s.game_path() {
+        crate::watcher::watch_guild_data(&app, Path::new(&current));
+    }
     Ok(s)
 }
 
@@ -119,7 +130,9 @@ pub async fn pick_game_folder(app: AppHandle) -> Result<Option<String>, String> 
 #[tauri::command]
 pub async fn fetch_manifest(state: State<'_, AppState>) -> Result<Manifest, String> {
     let url = format!("{}/manifest", crate::config::API_BASE_URL.trim_end_matches('/'));
-    let req = state.http.get(&url).header("X-API-KEY", crate::config::API_KEY);
+    let req = state.http.get(&url)
+        .header("X-API-KEY", crate::config::API_KEY)
+        .header("Accept", "application/json");
     let resp = req.send().await.map_err(|e| e.to_string())?;
     if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
         return Err("Unauthorized: the launcher's guild API key is invalid — contact an officer".to_string());
@@ -211,6 +224,7 @@ pub async fn sync_guild_data_to_web(app: AppHandle, state: State<'_, AppState>) 
     let req = state.http.post(&url)
         .bearer_auth(token)
         .header("X-API-KEY", crate::config::API_KEY)
+        .header("Accept", "application/json")
         .json(&SyncCharactersPayload { characters: &data });
 
     let resp = req.send().await.map_err(|e| e.to_string())?;
@@ -261,6 +275,7 @@ pub async fn sync_guild_roster_to_web(app: AppHandle, state: State<'_, AppState>
     let req = state.http.post(&url)
         .bearer_auth(token)
         .header("X-API-KEY", crate::config::API_KEY)
+        .header("Accept", "application/json")
         .json(&SyncRosterPayload { members: &data.members });
 
     let resp = req.send().await.map_err(|e| e.to_string())?;
