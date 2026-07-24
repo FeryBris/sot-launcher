@@ -220,20 +220,28 @@ export interface MyLootItem {
 export interface MyLootEntry {
   id: number
   item: MyLootItem
+  /** How many times this exact item was looted within this instance —
+   *  duplicates collapse into one entry server-side rather than listing
+   *  each occurrence separately. */
+  count: number
+  /** The most recent of the (possibly several, if count > 1) times this was looted. */
   givenAt: FormattedDate | null
   response: { id: number | null; label: string | null; name: string | null }
 }
 
-export interface MyLootRaid {
+/** Loot grouped by instance (not by individual raid night — one raid can
+ *  span several instances, and the same instance gets farmed across many
+ *  raid nights). */
+export interface MyLootInstance {
   id: number | null
   name: string
-  startedAt: FormattedDate | null
+  lastLootedAt: FormattedDate | null
   loots: MyLootEntry[]
 }
 
 export interface MyLootCharacter {
   name: string
-  raids: MyLootRaid[]
+  instances: MyLootInstance[]
 }
 
 export interface MyLootResponse {

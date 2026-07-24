@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { store } from '../store'
-import type { MyLootRaid } from '../types'
+import type { MyLootInstance } from '../types'
+import LoadingSpinner from './LoadingSpinner.vue'
 
 const QUALITY_COLOR: Record<string, string> = {
   Poor: '#9d9d9d',
@@ -18,23 +19,25 @@ function qualityColor(quality: string | null): string {
 const characters = computed(() => store.myLoot?.characters ?? [])
 
 const activeCharacterIndex = ref(0)
-const activeRaidIndex = ref(0)
+const activeInstanceIndex = ref(0)
 
 // Whenever the character tab changes, jump back to that character's most
-// recent raid (raids already arrive sorted newest-first).
+// recently-looted instance (instances already arrive sorted newest-first).
 watch(activeCharacterIndex, () => {
-  activeRaidIndex.value = 0
+  activeInstanceIndex.value = 0
 })
 
 const activeCharacter = computed(() => characters.value[activeCharacterIndex.value] ?? null)
-const activeRaid = computed<MyLootRaid | null>(
-  () => activeCharacter.value?.raids[activeRaidIndex.value] ?? null,
+const activeInstance = computed<MyLootInstance | null>(
+  () => activeCharacter.value?.instances[activeInstanceIndex.value] ?? null,
 )
 </script>
 
 <template>
   <div class="my-loot">
-    <div v-if="store.myLootLoading && !store.myLoot" class="empty">Loading…</div>
+    <div v-if="store.myLootLoading && !store.myLoot" class="empty">
+      <LoadingSpinner label="Loading…" />
+    </div>
     <div v-else-if="store.myLootError" class="empty error">{{ store.myLootError }}</div>
     <div v-else-if="!characters.length" class="empty">No loot recorded yet.</div>
 
@@ -52,22 +55,26 @@ const activeRaid = computed<MyLootRaid | null>(
       </div>
 
       <div class="loot-body">
-        <ul class="raid-list">
-          <li v-for="(raid, index) in activeCharacter?.raids ?? []" :key="raid.id ?? index">
+        <ul class="instance-list">
+          <li v-for="(instance, index) in activeCharacter?.instances ?? []" :key="instance.id ?? index">
             <button
-              class="raid-item"
-              :class="{ active: index === activeRaidIndex }"
-              @click="activeRaidIndex = index"
+              class="instance-item"
+              :class="{ active: index === activeInstanceIndex }"
+              @click="activeInstanceIndex = index"
             >
-              <span class="raid-name">{{ raid.name }}</span>
-              <span v-if="raid.startedAt?.stringDate" class="raid-date">{{ raid.startedAt.stringDate }}</span>
+              <span class="instance-name">{{ instance.name }}</span>
+              <span v-if="instance.lastLootedAt?.stringDate" class="instance-date">
+                {{ instance.lastLootedAt.stringDate }}
+              </span>
             </button>
           </li>
         </ul>
 
         <div class="loot-list">
-          <div v-if="!activeRaid || !activeRaid.loots.length" class="empty">No loot in this raid.</div>
-          <div v-for="loot in activeRaid?.loots ?? []" :key="loot.id" class="loot-row">
+          <div v-if="!activeInstance || !activeInstance.loots.length" class="empty">
+            No loot from this instance.
+          </div>
+          <div v-for="loot in activeInstance?.loots ?? []" :key="loot.id" class="loot-row">
             <img
               v-if="loot.item.media?.full_path"
               class="loot-icon"
@@ -82,9 +89,10 @@ const activeRaid = computed<MyLootRaid | null>(
               <span class="loot-sub">
                 <template v-if="loot.item.level">ilvl {{ loot.item.level }}</template>
                 <template v-if="loot.response?.name"> · {{ loot.response.name }}</template>
-                <template v-if="loot.givenAt?.stringDate"> · {{ loot.givenAt.stringDate }}</template>
               </span>
             </div>
+            <div v-if="loot.count > 1" class="loot-count" title="Times looted">×{{ loot.count }}</div>
+            <div v-if="loot.givenAt?.stringDate" class="loot-date">{{ loot.givenAt.stringDate }}</div>
           </div>
         </div>
       </div>
@@ -130,7 +138,7 @@ const activeRaid = computed<MyLootRaid | null>(
   min-height: 0;
 }
 
-.raid-list {
+.instance-list {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -143,7 +151,7 @@ const activeRaid = computed<MyLootRaid | null>(
   gap: 4px;
 }
 
-.raid-item {
+.instance-item {
   width: 100%;
   text-align: left;
   background: var(--bg-panel);
@@ -155,17 +163,17 @@ const activeRaid = computed<MyLootRaid | null>(
   gap: 2px;
 }
 
-.raid-item.active {
+.instance-item.active {
   border-color: var(--accent-strong);
   background: var(--bg-elevated);
 }
 
-.raid-name {
+.instance-name {
   font-size: 12px;
   font-weight: 600;
 }
 
-.raid-date {
+.instance-date {
   font-size: 11px;
   color: var(--text-dim);
 }
@@ -198,6 +206,7 @@ const activeRaid = computed<MyLootRaid | null>(
 }
 
 .loot-info {
+  flex: 1;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -213,6 +222,27 @@ const activeRaid = computed<MyLootRaid | null>(
 }
 
 .loot-sub {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.loot-count {
+  flex-shrink: 0;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent-strong);
+}
+
+.loot-date {
+  flex-shrink: 0;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
   font-size: 11px;
   color: var(--text-dim);
 }

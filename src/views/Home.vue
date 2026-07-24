@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { PhArrowSquareOut } from '@phosphor-icons/vue';
-import { currentGamePath, store } from '../store';
+import { store } from '../store';
 import { openCharacterPage } from '../api';
-import heroImg from '../assets/hero.png';
 import type { GuildSyncData } from '../types';
 import MyLoot from '../components/MyLoot.vue';
 
@@ -115,13 +114,6 @@ function viewCharacterOnWeb(character: GuildSyncData) {
 
 <template>
   <div class="home">
-    <div class="banner" :style="{ backgroundImage: `url(${heroImg})` }">
-      <div class="banner-overlay">
-        <h1>Welcome back{{ currentGamePath() ? '' : ', adventurer' }}</h1>
-        <p>Keep your addons in sync and jump straight into raid.</p>
-      </div>
-    </div>
-
     <section class="character">
       <div class="character-header">
         <h2>My Characters</h2>
@@ -177,38 +169,6 @@ function viewCharacterOnWeb(character: GuildSyncData) {
 .home {
   padding: 24px 28px;
   max-width: 760px;
-}
-
-.banner {
-  height: 160px;
-  border-radius: 12px;
-  background-size: cover;
-  background-position: center;
-  overflow: hidden;
-  position: relative;
-  margin-bottom: 28px;
-  border: 1px solid var(--border);
-}
-
-.banner-overlay {
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(0deg, rgba(14, 17, 22, 0.92), rgba(14, 17, 22, 0.35));
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-  padding: 16px 20px;
-}
-
-.banner-overlay h1 {
-  margin: 0;
-  font-size: 20px;
-}
-
-.banner-overlay p {
-  margin: 4px 0 0;
-  font-size: 12px;
-  color: var(--text-dim);
 }
 
 .character {

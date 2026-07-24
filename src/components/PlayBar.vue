@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { PhPlay } from '@phosphor-icons/vue'
 import { currentGamePath, pendingCount as computePendingCount, playNow, store, syncNow } from '../store'
 
 const pendingCount = computed(computePendingCount)
@@ -46,7 +47,10 @@ function statusLabel() {
       <button class="sync-btn" :disabled="!canSync" @click="syncNow">
         {{ pendingCount > 0 ? `Update (${pendingCount})` : 'Sync' }}
       </button>
-      <button class="play-btn" :disabled="!canPlay" @click="play">Play</button>
+      <button class="play-btn" :disabled="!canPlay" @click="play">
+        Play
+        <PhPlay :size="16" weight="fill" />
+      </button>
     </div>
   </footer>
 </template>
@@ -129,6 +133,9 @@ function statusLabel() {
   font-size: 14px;
   font-weight: 700;
   letter-spacing: 0.02em;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .play-btn:disabled {

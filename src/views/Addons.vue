@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import { confirmDelete, confirmDisable, deleteAddonNow, isAddonWanted, refreshManifest, setAddonDisabledNow, store } from '../store'
 import AddonRow from '../components/AddonRow.vue'
+import LoadingSpinner from '../components/LoadingSpinner.vue'
 
 const search = ref('')
 const hideDisabled = ref(false)
@@ -68,7 +69,9 @@ async function onToggleCustom(name: string, currentlyDisabled: boolean) {
       </div>
     </div>
 
-    <div v-if="store.loadingManifest" class="empty">Loading manifest...</div>
+    <div v-if="store.loadingManifest" class="empty">
+      <LoadingSpinner label="Loading manifest…" />
+    </div>
     <div v-else-if="store.manifestError" class="empty error">
       Couldn't reach the guild server: {{ store.manifestError }}
     </div>
