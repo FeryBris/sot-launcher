@@ -92,3 +92,79 @@ export interface LutrisGame {
   runner: string
   launchCommand: string
 }
+
+export interface GuildSyncTalents {
+  firstTree: string | null
+  firstPoints: number[]
+  secondTree: string | null
+  secondPoints: number[]
+}
+
+export interface GuildSyncProfessions {
+  first: string | null
+  firstSkill: number | null
+  second: string | null
+  secondSkill: number | null
+  firstAid: number | null
+  cooking: number | null
+  fishing: number | null
+}
+
+/** Field names match `character_stats`' columns 1:1 (snake_case, not
+ *  renamed) — same reason as the Rust side, see guild_sync.rs. */
+export interface GuildSyncStats {
+  strength: number | null
+  agility: number | null
+  stamina: number | null
+  intellect: number | null
+  spirit: number | null
+  armor: number | null
+  health: number | null
+  mana: number | null
+  attack_power: number | null
+  melee_crit: number | null
+  melee_haste: number | null
+  melee_hit: number | null
+  expertise: number | null
+  armor_penetration: number | null
+  ranged_attack_power: number | null
+  ranged_crit: number | null
+  ranged_hit: number | null
+  spell_power: number | null
+  spell_crit: number | null
+  spell_haste: number | null
+  spell_hit: number | null
+  spell_penetration: number | null
+  mana_regen: number | null
+  dodge: number | null
+  parry: number | null
+  block: number | null
+  block_value: number | null
+  defense_rating: number | null
+  resilience: number | null
+  resistance_arcane: number | null
+  resistance_fire: number | null
+  resistance_frost: number | null
+  resistance_nature: number | null
+  resistance_shadow: number | null
+}
+
+/** Parsed from the SoTGuildSync addon's SavedVariables — used unchanged
+ *  for both local display and the sync-to-web payload. */
+export interface GuildSyncData {
+  name: string
+  class: string
+  race: string
+  gender: string | null
+  guildRank: string | null
+  guildRankIndex: number | null
+  level: number
+  gold: number
+  equipment: number[]
+  talents: GuildSyncTalents
+  honorableKills: number
+  achievementPoints: number
+  stats: GuildSyncStats
+  professions: GuildSyncProfessions
+  updatedAt: number
+}

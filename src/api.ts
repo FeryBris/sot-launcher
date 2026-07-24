@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { open } from '@tauri-apps/plugin-shell'
 import type {
   CombinedSyncResult,
+  GuildSyncData,
   InstalledState,
   LutrisGame,
   Manifest,
@@ -68,6 +69,14 @@ export function launchGame(): Promise<void> {
 
 export function listLutrisGames(): Promise<LutrisGame[]> {
   return invoke('list_lutris_games')
+}
+
+export function getGuildSyncData(): Promise<GuildSyncData[]> {
+  return invoke('get_guild_sync_data')
+}
+
+export function syncGuildDataToWeb(): Promise<void> {
+  return invoke('sync_guild_data_to_web')
 }
 
 export function onSyncProgress(handler: (p: SyncProgress) => void): Promise<UnlistenFn> {

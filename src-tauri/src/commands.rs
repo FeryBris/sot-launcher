@@ -153,6 +153,55 @@ pub fn delete_addon(app: AppHandle, manifest: Manifest, name: String) -> Result<
     Ok(sync::get_installed_state(&game_path, &manifest))
 }
 
+/// Reads the SoTGuildSync addon's current SavedVariables snapshot for
+/// local display — one entry per guild character logged into on this WoW
+/// account. Empty covers both "no game folder set" and "addon hasn't
+/// written anything yet", neither of which is an error state for the UI.
+#[tauri::command]
+pub fn get_guild_sync_data(app: AppHandle) -> Result<Vec<crate::types::GuildSyncData>, String> {
+    let s = settings::load_settings(&app)?;
+    let Some(game_path) = s.game_path else {
+        return Ok(Vec::new());
+    };
+    crate::guild_sync::read_guild_sync_data(Path::new(&game_path))
+}
+
+#[derive(serde::Serialize)]
+struct SyncCharactersPayload<'a> {
+    characters: &'a [crate::types::GuildSyncData],
+}
+
+/// Reads the same snapshot `get_guild_sync_data` does and POSTs every
+/// known guild character in one batch, authenticated the same way
+/// `/unpair` already is.
+#[tauri::command]
+pub async fn sync_guild_data_to_web(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    let s = settings::load_settings(&app)?;
+    let game_path = s.game_path.clone().ok_or_else(|| "no game folder configured".to_string())?;
+    let token = s
+        .discord_token
+        .as_deref()
+        .filter(|t| !t.is_empty())
+        .ok_or_else(|| "sign in with Discord first".to_string())?;
+
+    let data = crate::guild_sync::read_guild_sync_data(Path::new(&game_path))?;
+    if data.is_empty() {
+        return Err("no character data found yet — log in as a Stalkers of Time member first".to_string());
+    }
+
+    let url = format!("{}/characters/sync", s.api_base_url.trim_end_matches('/'));
+    let mut req = state.http.post(&url).bearer_auth(token).json(&SyncCharactersPayload { characters: &data });
+    if let Some(key) = s.api_key.as_deref().filter(|k| !k.is_empty()) {
+        req = req.header("X-API-KEY", key);
+    }
+
+    let resp = req.send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {} while syncing character data", resp.status()));
+    }
+    Ok(())
+}
+
 #[derive(serde::Deserialize)]
 struct PairResponse {
     token: String,

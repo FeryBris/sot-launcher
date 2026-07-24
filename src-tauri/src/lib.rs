@@ -1,4 +1,5 @@
 mod commands;
+mod guild_sync;
 mod settings;
 mod sync;
 mod types;
@@ -116,6 +117,8 @@ pub fn run() {
       commands::pair_with_code,
       commands::clear_discord_login,
       commands::list_lutris_games,
+      commands::get_guild_sync_data,
+      commands::sync_guild_data_to_web,
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

@@ -173,3 +173,91 @@ pub struct LutrisGame {
     pub runner: String,
     pub launch_command: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuildSyncTalents {
+    pub first_tree: Option<String>,
+    #[serde(default)]
+    pub first_points: Vec<i64>,
+    pub second_tree: Option<String>,
+    #[serde(default)]
+    pub second_points: Vec<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuildSyncProfessions {
+    pub first: Option<String>,
+    pub first_skill: Option<i64>,
+    pub second: Option<String>,
+    pub second_skill: Option<i64>,
+    pub first_aid: Option<i64>,
+    pub cooking: Option<i64>,
+    pub fishing: Option<i64>,
+}
+
+/// Deliberately not camelCase-renamed — the addon writes these keys as
+/// snake_case already (they map 1:1 onto `character_stats`' columns on
+/// the web side), unlike the rest of this payload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GuildSyncStats {
+    pub strength: Option<i64>,
+    pub agility: Option<i64>,
+    pub stamina: Option<i64>,
+    pub intellect: Option<i64>,
+    pub spirit: Option<i64>,
+    pub armor: Option<i64>,
+    pub health: Option<i64>,
+    pub mana: Option<i64>,
+    pub attack_power: Option<i64>,
+    pub melee_crit: Option<f64>,
+    pub melee_haste: Option<f64>,
+    pub melee_hit: Option<f64>,
+    pub expertise: Option<f64>,
+    pub armor_penetration: Option<f64>,
+    pub ranged_attack_power: Option<i64>,
+    pub ranged_crit: Option<f64>,
+    pub ranged_hit: Option<f64>,
+    pub spell_power: Option<i64>,
+    pub spell_crit: Option<f64>,
+    pub spell_haste: Option<f64>,
+    pub spell_hit: Option<f64>,
+    pub spell_penetration: Option<f64>,
+    pub mana_regen: Option<f64>,
+    pub dodge: Option<f64>,
+    pub parry: Option<f64>,
+    pub block: Option<f64>,
+    pub block_value: Option<i64>,
+    pub defense_rating: Option<i64>,
+    pub resilience: Option<f64>,
+    pub resistance_arcane: Option<i64>,
+    pub resistance_fire: Option<i64>,
+    pub resistance_frost: Option<i64>,
+    pub resistance_nature: Option<i64>,
+    pub resistance_shadow: Option<i64>,
+}
+
+/// Parsed straight from the SoTGuildSync addon's SavedVariables JSON blob.
+/// Used unchanged both to display in the launcher and as the sync-to-web
+/// payload — see `guild_sync::read_guild_sync_data`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuildSyncData {
+    pub name: String,
+    pub class: String,
+    pub race: String,
+    pub gender: Option<String>,
+    pub guild_rank: Option<String>,
+    pub guild_rank_index: Option<i64>,
+    pub level: i64,
+    pub gold: i64,
+    #[serde(default)]
+    pub equipment: Vec<i64>,
+    pub talents: GuildSyncTalents,
+    pub honorable_kills: i64,
+    pub achievement_points: i64,
+    pub stats: GuildSyncStats,
+    pub professions: GuildSyncProfessions,
+    pub updated_at: i64,
+}

@@ -1,6 +1,6 @@
 import { reactive } from 'vue'
 import * as api from './api'
-import type { AddonEntry, InstalledState, Manifest, Settings, SyncProgress } from './types'
+import type { AddonEntry, GuildSyncData, InstalledState, Manifest, Settings, SyncProgress } from './types'
 
 export interface ConfirmRequest {
   title: string
@@ -22,6 +22,9 @@ interface Store {
   syncError: string
   discordError: string
   loaded: boolean
+  guildSyncData: GuildSyncData[]
+  guildSyncing: boolean
+  guildSyncError: string
 }
 
 export const store = reactive<Store>({
@@ -47,6 +50,9 @@ export const store = reactive<Store>({
   syncError: '',
   discordError: '',
   loaded: false,
+  guildSyncData: [],
+  guildSyncing: false,
+  guildSyncError: '',
 })
 
 /** Active confirm-dialog request, rendered by <ConfirmDialog> mounted once at the app root. */
@@ -73,6 +79,21 @@ let progressUnlisten: (() => void) | null = null
 let discordPairedUnlisten: (() => void) | null = null
 let discordPairErrorUnlisten: (() => void) | null = null
 
+const GUILD_SYNC_POLL_INTERVAL_MS = 5000
+let guildSyncPollHandle: ReturnType<typeof setInterval> | null = null
+
+/** Keeps the "My Characters" list current while the launcher's open —
+ *  SoTGuildSyncDB.lua only ever changes on WoW-side events (login, logout,
+ *  gear/gold changes), not while the launcher itself is doing anything, so
+ *  there's no other trigger to notice a change without this. Runs for the
+ *  life of the app; never stopped, same as the other event listeners below. */
+function startGuildSyncPolling() {
+  if (guildSyncPollHandle) return
+  guildSyncPollHandle = setInterval(() => {
+    void refreshGuildSyncData()
+  }, GUILD_SYNC_POLL_INTERVAL_MS)
+}
+
 export async function init() {
   if (store.loaded) return
   store.settings = await api.getSettings()
@@ -96,6 +117,34 @@ export async function init() {
 
   if (store.settings.apiBaseUrl) {
     await refreshManifest()
+  }
+
+  await refreshGuildSyncData()
+  startGuildSyncPolling()
+}
+
+/** Re-reads the SoTGuildSync addon's SavedVariables snapshot, if any. */
+export async function refreshGuildSyncData() {
+  if (!store.settings.gamePath) {
+    store.guildSyncData = []
+    return
+  }
+  try {
+    store.guildSyncData = await api.getGuildSyncData()
+  } catch {
+    store.guildSyncData = []
+  }
+}
+
+export async function syncGuildDataToWeb() {
+  store.guildSyncing = true
+  store.guildSyncError = ''
+  try {
+    await api.syncGuildDataToWeb()
+  } catch (e) {
+    store.guildSyncError = String(e)
+  } finally {
+    store.guildSyncing = false
   }
 }
 
@@ -147,6 +196,7 @@ export async function refreshInstalledState() {
 export async function saveGamePath(path: string) {
   store.settings = await api.setGamePath(path)
   await refreshInstalledState()
+  await refreshGuildSyncData()
 }
 
 export async function saveLaunchCommand(command: string) {

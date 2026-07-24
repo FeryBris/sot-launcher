@@ -1,6 +1,65 @@
 <script setup lang="ts">
-import { store } from '../store';
+import { computed } from 'vue';
+import { store, syncGuildDataToWeb } from '../store';
 import heroImg from '../assets/hero.png';
+import type { GuildSyncData } from '../types';
+
+// Same filenames the guild website uses for portraits (gender-race-class.webp,
+// snake_case, e.g. "male-night_elf-death_knight.webp") — copied locally so
+// the launcher doesn't need a network round-trip just to show them.
+const portraitModules = import.meta.glob('../assets/portraits/*.webp', { eager: true, import: 'default' }) as Record<string, string>
+const portraitsByFile: Record<string, string> = {}
+for (const path in portraitModules) {
+  const file = path.split('/').pop()!
+  portraitsByFile[file] = portraitModules[path]
+}
+
+// Fallback when a specific gender/race/class combo has no portrait (not
+// every race/class pairing exists in WotLK) — the generic per-class icon,
+// same one ClassPortrait.vue uses on the website.
+const classIconModules = import.meta.glob('../assets/classes/*.webp', { eager: true, import: 'default' }) as Record<string, string>
+const classIconsByFile: Record<string, string> = {}
+for (const path in classIconModules) {
+  const file = path.split('/').pop()!
+  classIconsByFile[file] = classIconModules[path]
+}
+
+// The addon reports WoW's raw, non-localized API tokens (e.g. class
+// "WARLOCK", race "NightElf", "Scourge" for Undead) — map those to the
+// portrait filenames' snake_case pieces, same normalization the website's
+// CharacterSyncService does server-side for display.
+const CLASS_KEY: Record<string, string> = {
+  WARRIOR: 'warrior', PALADIN: 'paladin', HUNTER: 'hunter', ROGUE: 'rogue',
+  PRIEST: 'priest', DEATHKNIGHT: 'death_knight', SHAMAN: 'shaman',
+  MAGE: 'mage', WARLOCK: 'warlock', DRUID: 'druid',
+}
+const RACE_KEY: Record<string, string> = {
+  Human: 'human', Dwarf: 'dwarf', NightElf: 'night_elf', Gnome: 'gnome',
+  Draenei: 'draenei', Orc: 'orc', Scourge: 'undead', Tauren: 'tauren',
+  Troll: 'troll', BloodElf: 'blood_elf',
+}
+
+function portraitSrc(character: GuildSyncData): string {
+  const gender = (character.gender ?? 'Male').toLowerCase()
+  const race = RACE_KEY[character.race] ?? character.race.toLowerCase()
+  const cls = CLASS_KEY[character.class.toUpperCase()] ?? character.class.toLowerCase()
+  const file = `${gender}-${race}-${cls}.webp`
+  const classIconFile = `${cls.replace(/_/g, '')}.webp`
+  return portraitsByFile[file] ?? classIconsByFile[classIconFile] ?? portraitsByFile['blank.webp']
+}
+
+// Highest level first; within the same level, higher guild rank first
+// (lower guildRankIndex = higher rank, matching WoW's own 0-based
+// convention where 0 is Guild Master). Characters with no rank yet known
+// sort after ones that do.
+const sortedCharacters = computed<GuildSyncData[]>(() => {
+  return [...store.guildSyncData].sort((a, b) => {
+    if (a.level !== b.level) return b.level - a.level
+    const rankA = a.guildRankIndex ?? Infinity
+    const rankB = b.guildRankIndex ?? Infinity
+    return rankA - rankB
+  })
+})
 </script>
 
 <template>
@@ -11,6 +70,42 @@ import heroImg from '../assets/hero.png';
         <p>Keep your addons in sync and jump straight into raid.</p>
       </div>
     </div>
+
+    <section class="character">
+      <div class="character-header">
+        <h2>My Characters</h2>
+        <button
+          v-if="store.guildSyncData.length"
+          class="btn accent"
+          :disabled="!store.settings.discordToken || store.guildSyncing"
+          @click="syncGuildDataToWeb"
+        >
+          {{ store.guildSyncing ? 'Syncing…' : 'Sync to website' }}
+        </button>
+      </div>
+
+      <div v-if="!store.guildSyncData.length" class="empty">
+        No character data yet — log in as a Stalkers of Time member with the
+        SoTGuildSync addon installed.
+      </div>
+
+      <template v-else>
+        <ul class="character-list">
+          <li v-for="character in sortedCharacters" :key="character.name" class="character-row">
+            <img class="character-portrait" :src="portraitSrc(character)" alt="" />
+            <span class="character-name">{{ character.name }}</span>
+            <span class="character-sub">
+              {{ character.race }} {{ character.class }} · Level {{ character.level }}
+              <template v-if="character.guildRank"> · {{ character.guildRank }}</template>
+            </span>
+          </li>
+        </ul>
+        <p v-if="!store.settings.discordToken" class="hint">
+          Sign in with Discord (sidebar) to sync these to the website.
+        </p>
+        <p v-if="store.guildSyncError" class="hint error">{{ store.guildSyncError }}</p>
+      </template>
+    </section>
 
     <section class="news">
       <h2>Guild News</h2>
@@ -68,6 +163,104 @@ import heroImg from '../assets/hero.png';
   margin: 4px 0 0;
   font-size: 12px;
   color: var(--text-dim);
+}
+
+.character {
+  margin-bottom: 28px;
+}
+
+.character h2 {
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  margin: 0;
+}
+
+.character-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.character-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.character-row {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.character-portrait {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+  object-fit: cover;
+}
+
+.character-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.character-sub {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.btn {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius);
+  padding: 9px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.btn:hover {
+  border-color: var(--accent-dim);
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.btn.accent {
+  background: var(--accent);
+  color: #062028;
+  border-color: var(--accent);
+}
+
+.btn.accent:hover:not(:disabled) {
+  border-color: var(--accent-strong);
+}
+
+.hint {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.hint.error {
+  color: var(--danger);
 }
 
 .news h2 {
