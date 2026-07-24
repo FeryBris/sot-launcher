@@ -92,7 +92,10 @@ const activeInstance = computed<MyLootInstance | null>(
               </span>
             </div>
             <div v-if="loot.count > 1" class="loot-count" title="Times looted">×{{ loot.count }}</div>
-            <div v-if="loot.givenAt?.stringDate" class="loot-date">{{ loot.givenAt.stringDate }}</div>
+            <div v-if="loot.givenAt?.day" class="loot-date" :title="loot.givenAt.stringDate">
+              <span class="loot-date-day">{{ loot.givenAt.day }}.{{ loot.givenAt.month }}.</span>
+              <span class="loot-date-year">{{ loot.givenAt.year }}</span>
+            </div>
           </div>
         </div>
       </div>
@@ -243,7 +246,20 @@ const activeInstance = computed<MyLootInstance | null>(
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 4px 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 1.3;
+}
+
+.loot-date-day {
   font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.loot-date-year {
+  font-size: 10px;
   color: var(--text-dim);
 }
 

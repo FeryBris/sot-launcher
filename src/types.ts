@@ -199,6 +199,10 @@ export interface FormattedDate {
   stringDate?: string
   time?: string
   formatted?: string
+  /** Zero-padded "DD", "MM", "YYYY" — used for the compact loot-date box. */
+  day?: string
+  month?: string
+  year?: string
   [key: string]: unknown
 }
 
