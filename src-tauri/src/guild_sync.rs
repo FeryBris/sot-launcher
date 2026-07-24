@@ -6,15 +6,16 @@ use std::time::SystemTime;
 /// A player can have multiple WoW accounts under one install, each with its
 /// own `WTF/Account/<NAME>/SavedVariables/` folder — there's no central
 /// "current account" record anywhere on disk, so this scans every account
-/// folder for the addon's file and returns whichever was written most
-/// recently (i.e. whichever account the player actually just played).
-pub fn find_saved_variables_file(game_path: &Path) -> Option<PathBuf> {
+/// folder for the given addon SavedVariables file and returns whichever was
+/// written most recently (i.e. whichever account the player actually just
+/// played). Shared by every addon this launcher reads SavedVariables from.
+pub fn find_saved_variables_file(game_path: &Path, file_name: &str) -> Option<PathBuf> {
     let accounts_dir = game_path.join("WTF").join("Account");
     let entries = fs::read_dir(&accounts_dir).ok()?;
 
     let mut newest: Option<(PathBuf, SystemTime)> = None;
     for entry in entries.flatten() {
-        let candidate = entry.path().join("SavedVariables").join("SoTGuildSync.lua");
+        let candidate = entry.path().join("SavedVariables").join(file_name);
         let Ok(metadata) = fs::metadata(&candidate) else {
             continue;
         };
@@ -33,14 +34,16 @@ pub fn find_saved_variables_file(game_path: &Path) -> Option<PathBuf> {
     newest.map(|(path, _)| path)
 }
 
-/// Pulls the single `["json"] = "..."` string out of the addon's
+/// Pulls a single `["<field>"] = "..."` string out of an addon's
 /// SavedVariables file and un-escapes it. This is not a general Lua
-/// parser — it only understands the one shape the addon ever writes
-/// (`SoTGuildSyncDB = { ["json"] = "<escaped JSON>" }`), which is
-/// deliberately simple enough not to need one.
-fn extract_json_string(raw: &str) -> Option<String> {
-    let marker = "[\"json\"] = \"";
-    let start = raw.find(marker)? + marker.len();
+/// parser — it only understands the one shape every field these addons
+/// write uses (`SavedVarsTable = { ["field"] = "<escaped JSON>" }`), which
+/// is deliberately simple enough not to need one. SoTGuildSync writes both
+/// `json` (per-character data) and `rosterJson` (the whole guild roster)
+/// into the same file under different field names.
+pub fn extract_json_string(raw: &str, field: &str) -> Option<String> {
+    let marker = format!("[\"{field}\"] = \"");
+    let start = raw.find(&marker)? + marker.len();
     let rest = &raw[start..];
 
     let mut out = String::with_capacity(rest.len());
@@ -70,12 +73,12 @@ fn extract_json_string(raw: &str) -> Option<String> {
 /// an empty list if the addon hasn't written anything yet, rather than an
 /// error — that's the normal "never logged in as a guild member" case.
 pub fn read_guild_sync_data(game_path: &Path) -> Result<Vec<GuildSyncData>, String> {
-    let Some(path) = find_saved_variables_file(game_path) else {
+    let Some(path) = find_saved_variables_file(game_path, "SoTGuildSync.lua") else {
         return Ok(Vec::new());
     };
 
     let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let json = extract_json_string(&raw)
+    let json = extract_json_string(&raw, "json")
         .ok_or_else(|| "could not find guild sync data in SavedVariables file".to_string())?;
 
     // The addon's own JSON encoder can't tell an empty map from an empty

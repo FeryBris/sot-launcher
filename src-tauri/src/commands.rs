@@ -220,6 +220,56 @@ pub async fn sync_guild_data_to_web(app: AppHandle, state: State<'_, AppState>) 
     Ok(())
 }
 
+/// Reads the GuildExport addon's current full-guild-roster snapshot, if
+/// anyone in the guild has run that addon yet. Unlike get_guild_sync_data
+/// this isn't scoped to "characters logged into on this WoW account" — one
+/// person running GuildExport covers the whole roster.
+#[tauri::command]
+pub fn get_guild_roster(app: AppHandle) -> Result<Option<crate::guild_roster::GuildRosterData>, String> {
+    let s = settings::load_settings(&app)?;
+    let Some(game_path) = s.game_path() else {
+        return Ok(None);
+    };
+    crate::guild_roster::read_guild_roster(Path::new(&game_path))
+}
+
+#[derive(serde::Serialize)]
+struct SyncRosterPayload<'a> {
+    members: &'a [crate::guild_roster::GuildRosterMember],
+}
+
+/// Reads the same snapshot `get_guild_roster` does and POSTs the full
+/// roster in one batch, authenticated the same way character sync is.
+#[tauri::command]
+pub async fn sync_guild_roster_to_web(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    let s = settings::load_settings(&app)?;
+    let game_path = s.game_path().ok_or_else(|| "no game folder configured".to_string())?;
+    let token = s
+        .discord_token
+        .as_deref()
+        .filter(|t| !t.is_empty())
+        .ok_or_else(|| "sign in with Discord first".to_string())?;
+
+    let data = crate::guild_roster::read_guild_roster(Path::new(&game_path))?
+        .ok_or_else(|| "no guild roster data found yet — run GuildExport first".to_string())?;
+
+    if data.members.is_empty() {
+        return Err("guild roster is empty".to_string());
+    }
+
+    let url = format!("{}/guild-roster/sync", crate::config::API_BASE_URL.trim_end_matches('/'));
+    let req = state.http.post(&url)
+        .bearer_auth(token)
+        .header("X-API-KEY", crate::config::API_KEY)
+        .json(&SyncRosterPayload { members: &data.members });
+
+    let resp = req.send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {} while syncing guild roster", resp.status()));
+    }
+    Ok(())
+}
+
 #[derive(serde::Deserialize)]
 struct PairResponse {
     token: String,

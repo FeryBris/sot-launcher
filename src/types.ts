@@ -167,6 +167,32 @@ export interface GuildSyncStats {
   resistance_shadow: number | null
 }
 
+/** One guild member as reported by GetGuildRosterInfo() via the
+ *  GuildExport addon — visible for the WHOLE guild from any single
+ *  member's client, unlike GuildSyncData which only ever covers the
+ *  character actually logged in and running SoTGuildSync. */
+export interface GuildRosterMember {
+  name: string
+  class: string | null
+  level: number | null
+  guildRank: string | null
+  guildRankIndex: number | null
+  zone: string | null
+  publicNote: string | null
+  officerNote: string | null
+  isOnline: boolean | null
+  /** The only source of this for a character that never runs SoTGuildSync itself. */
+  achievementPoints: number | null
+}
+
+/** Parsed from the GuildExport addon's SavedVariables. */
+export interface GuildRosterData {
+  guildName: string | null
+  realm: string | null
+  updatedAt: number
+  members: GuildRosterMember[]
+}
+
 /** Parsed from the SoTGuildSync addon's SavedVariables — used unchanged
  *  for both local display and the sync-to-web payload. */
 export interface GuildSyncData {

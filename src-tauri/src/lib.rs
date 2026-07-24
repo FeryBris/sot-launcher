@@ -1,5 +1,6 @@
 mod commands;
 mod config;
+mod guild_roster;
 mod guild_sync;
 mod settings;
 mod sync;
@@ -153,6 +154,8 @@ pub fn run() {
       commands::list_lutris_games,
       commands::get_guild_sync_data,
       commands::sync_guild_data_to_web,
+      commands::get_guild_roster,
+      commands::sync_guild_roster_to_web,
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

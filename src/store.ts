@@ -1,7 +1,15 @@
 import { reactive } from 'vue'
 import * as api from './api'
 import { isWindows } from './platform'
-import type { AddonEntry, GuildSyncData, InstalledState, Manifest, Settings, SyncProgress } from './types'
+import type {
+  AddonEntry,
+  GuildRosterData,
+  GuildSyncData,
+  InstalledState,
+  Manifest,
+  Settings,
+  SyncProgress,
+} from './types'
 
 export interface ConfirmRequest {
   title: string
@@ -31,6 +39,12 @@ interface Store {
   guildSyncing: boolean
   guildSyncError: string
   guildLastSyncedAt: number | null
+  /** Full guild roster from the GuildExport addon — unlike guildSyncData,
+   *  not scoped to characters logged into on this WoW account. */
+  guildRoster: GuildRosterData | null
+  guildRosterSyncing: boolean
+  guildRosterSyncError: string
+  guildRosterLastSyncedAt: number | null
 }
 
 export const store = reactive<Store>({
@@ -61,6 +75,10 @@ export const store = reactive<Store>({
   guildSyncing: false,
   guildSyncError: '',
   guildLastSyncedAt: null,
+  guildRoster: null,
+  guildRosterSyncing: false,
+  guildRosterSyncError: '',
+  guildRosterLastSyncedAt: null,
 })
 
 /** Active confirm-dialog request, rendered by <ConfirmDialog> mounted once at the app root. */
@@ -99,6 +117,7 @@ function startGuildSyncPolling() {
   if (guildSyncPollHandle) return
   guildSyncPollHandle = setInterval(() => {
     void refreshGuildSyncData().then(() => maybeAutoSyncGuildData())
+    void refreshGuildRoster().then(() => maybeAutoSyncGuildRoster())
   }, GUILD_SYNC_POLL_INTERVAL_MS)
 }
 
@@ -161,6 +180,7 @@ export async function init() {
     store.settings = s
     store.discordError = ''
     void maybeAutoSyncGuildData()
+    void maybeAutoSyncGuildRoster()
   })
   discordPairErrorUnlisten = await api.onDiscordPairError((message) => {
     store.discordError = message
@@ -169,6 +189,8 @@ export async function init() {
   await refreshManifest()
   await refreshGuildSyncData()
   void maybeAutoSyncGuildData()
+  await refreshGuildRoster()
+  void maybeAutoSyncGuildRoster()
   startGuildSyncPolling()
 }
 
@@ -194,6 +216,56 @@ async function syncGuildDataToWeb() {
     store.guildSyncError = String(e)
   } finally {
     store.guildSyncing = false
+  }
+}
+
+/** Re-reads the GuildExport addon's SavedVariables snapshot, if any. */
+export async function refreshGuildRoster() {
+  if (!currentGamePath()) {
+    store.guildRoster = null
+    return
+  }
+  try {
+    store.guildRoster = await api.getGuildRoster()
+  } catch {
+    store.guildRoster = null
+  }
+}
+
+let lastAutoRosterSyncAt = 0
+let lastAutoRosterSyncedAt = 0
+
+/** Same debounced-auto-sync shape as maybeAutoSyncGuildData, but keyed off
+ *  the roster snapshot's own `updatedAt` (a single timestamp for the whole
+ *  roster, set whenever GuildExport re-saves) rather than a per-character
+ *  join — there's no per-member identity to track here, just "has the
+ *  addon written a newer snapshot than what we last sent". */
+async function maybeAutoSyncGuildRoster() {
+  if (!store.settings.discordToken) return
+  if (store.guildRosterSyncing) return
+  if (!store.guildRoster || store.guildRoster.members.length === 0) return
+
+  if (store.guildRoster.updatedAt === lastAutoRosterSyncedAt) return
+  if (Date.now() - lastAutoRosterSyncAt < AUTO_SYNC_DEBOUNCE_MS) return
+
+  lastAutoRosterSyncAt = Date.now()
+  const syncedUpdatedAt = store.guildRoster.updatedAt
+  await syncGuildRosterToWeb()
+  if (!store.guildRosterSyncError) {
+    lastAutoRosterSyncedAt = syncedUpdatedAt
+    store.guildRosterLastSyncedAt = Date.now()
+  }
+}
+
+async function syncGuildRosterToWeb() {
+  store.guildRosterSyncing = true
+  store.guildRosterSyncError = ''
+  try {
+    await api.syncGuildRosterToWeb()
+  } catch (e) {
+    store.guildRosterSyncError = String(e)
+  } finally {
+    store.guildRosterSyncing = false
   }
 }
 
