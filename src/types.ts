@@ -243,7 +243,7 @@ export interface MyLootInstance {
   id: number | null
   name: string
   /** Same abbreviation convention as the website's InstancePortrait.vue
-   *  (e.g. "IC", "ToC", "Naxx") — used to look up a banner image and as
+   *  (e.g. "IC", "ToGC", "Naxx") — used to look up a banner image and as
    *  the sidebar's compact label. */
   abbreviation: string | null
   /** e.g. "Tier 9" — shown alongside the full name above the item list. */

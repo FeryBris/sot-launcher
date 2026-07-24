@@ -57,7 +57,7 @@ const INSTANCE_IMAGE: Record<string, string> = {
   EoE: eyeOfEternityImg,
   VoA: voaImg,
   UD: ulduarImg,
-  ToC: trialOfTheCrusaderImg,
+  ToGC: trialOfTheCrusaderImg,
   IC: icecrownCitadelImg,
   OL: onyxiaLairImg,
 };
