@@ -125,6 +125,11 @@ export function openCharacterPage(apiBaseUrl: string, name: string): Promise<voi
   return open(site.toString())
 }
 
+/** Opens an item's Wowhead page (WotLK client DB) in the system browser. */
+export function openWowheadItem(wowheadId: number): Promise<void> {
+  return open(`https://www.wowhead.com/wotlk/item=${wowheadId}`)
+}
+
 export function pairWithCode(code: string): Promise<Settings> {
   return invoke('pair_with_code', { code })
 }

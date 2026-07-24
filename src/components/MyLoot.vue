@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
+import { openWowheadItem } from '../api';
 import { store } from '../store';
 import type { MyLootInstance, MyLootItem } from '../types';
 import LoadingSpinner from './LoadingSpinner.vue';
@@ -196,9 +197,15 @@ const responseTotals = computed(() => {
                 @error="onItemIconError(loot.item, $event)"
               />
               <div class="loot-info">
-                <span class="loot-name" :style="{ color: qualityColor(loot.item.quality) }">
-                  {{ loot.item.name }}
-                </span>
+                <button
+                  class="loot-name-link"
+                  title="View on Wowhead"
+                  @click="openWowheadItem(loot.item.wowheadId)"
+                >
+                  <span class="loot-name" :style="{ color: qualityColor(loot.item.quality) }">
+                    {{ loot.item.name }}
+                  </span>
+                </button>
                 <span class="loot-sub">
                   <span v-if="loot.item.level" class="loot-ilvl">ilvl {{ loot.item.level }}</span>
                   <template v-if="loot.response?.name">
@@ -445,12 +452,28 @@ const responseTotals = computed(() => {
   min-width: 0;
 }
 
+.loot-name-link {
+  align-self: flex-start;
+  max-width: 100%;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.loot-name-link:hover .loot-name {
+  text-decoration: underline;
+}
+
 .loot-name {
   font-size: 13px;
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  display: block;
 }
 
 .loot-sub {
