@@ -182,7 +182,6 @@ const activeInstance = computed<MyLootInstance | null>(
 .instance-list {
   list-style: none;
   margin: 0;
-  padding: 0;
   width: 200px;
   flex-shrink: 0;
   max-height: var(--list-max-height);
@@ -190,6 +189,10 @@ const activeInstance = computed<MyLootInstance | null>(
   display: flex;
   flex-direction: column;
   gap: var(--row-gap);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px;
 }
 
 .instance-item {
@@ -247,6 +250,33 @@ const activeInstance = computed<MyLootInstance | null>(
   display: flex;
   flex-direction: column;
   gap: var(--row-gap);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px;
+}
+
+/* Thin, unobtrusive scrollbars for both boxes. */
+.instance-list,
+.loot-list {
+  scrollbar-width: thin;
+  scrollbar-color: var(--accent-dim) transparent;
+}
+
+.instance-list::-webkit-scrollbar,
+.loot-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.instance-list::-webkit-scrollbar-track,
+.loot-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.instance-list::-webkit-scrollbar-thumb,
+.loot-list::-webkit-scrollbar-thumb {
+  background: var(--accent-dim);
+  border-radius: 3px;
 }
 
 .loot-row {
