@@ -8,6 +8,7 @@ import type {
   InstalledState,
   LutrisGame,
   Manifest,
+  MyLootResponse,
   Settings,
   SyncProgress,
 } from './types'
@@ -92,6 +93,10 @@ export function getGuildRoster(): Promise<GuildRosterData | null> {
 
 export function syncGuildRosterToWeb(): Promise<void> {
   return invoke('sync_guild_roster_to_web')
+}
+
+export function getMyLoot(): Promise<MyLootResponse> {
+  return invoke('get_my_loot')
 }
 
 export function onSyncProgress(handler: (p: SyncProgress) => void): Promise<UnlistenFn> {

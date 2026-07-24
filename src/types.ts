@@ -193,6 +193,53 @@ export interface GuildRosterData {
   members: GuildRosterMember[]
 }
 
+/** Website's DateFormatterHelper::get() shape — only the fields actually
+ *  used here are listed, the rest pass through untyped. */
+export interface FormattedDate {
+  stringDate?: string
+  time?: string
+  formatted?: string
+  [key: string]: unknown
+}
+
+/** Website's ItemResource shape, as returned by /api/launcher/my-loot. */
+export interface MyLootItem {
+  id: number
+  wowheadId: number
+  name: string
+  level: number | null
+  /** Media relation is snake_case on the website's side (unlike the rest
+   *  of this payload) — `full_path` is the actual icon image URL. */
+  media: { full_path?: string } | null
+  quality: string | null
+  class: string | null
+  subclass: string | null
+  type: string | null
+}
+
+export interface MyLootEntry {
+  id: number
+  item: MyLootItem
+  givenAt: FormattedDate | null
+  response: { id: number | null; label: string | null; name: string | null }
+}
+
+export interface MyLootRaid {
+  id: number | null
+  name: string
+  startedAt: FormattedDate | null
+  loots: MyLootEntry[]
+}
+
+export interface MyLootCharacter {
+  name: string
+  raids: MyLootRaid[]
+}
+
+export interface MyLootResponse {
+  characters: MyLootCharacter[]
+}
+
 /** Parsed from the SoTGuildSync addon's SavedVariables — used unchanged
  *  for both local display and the sync-to-web payload. */
 export interface GuildSyncData {

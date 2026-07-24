@@ -17,6 +17,12 @@ function statusLabel() {
     return `${store.syncProgress.stage} ${store.syncProgress.item} (${store.syncProgress.current}/${store.syncProgress.total})`
   }
   if (store.syncing) return 'Syncing...'
+  if (store.guildSyncing) {
+    return store.guildSyncData.length === 1
+      ? `Syncing ${store.guildSyncData[0].name}...`
+      : `Syncing ${store.guildSyncData.length} characters...`
+  }
+  if (store.guildRosterSyncing) return 'Syncing guild roster...'
   if (store.manifestError) return `Guild server error: ${store.manifestError}`
   if (pendingCount.value > 0) return `${pendingCount.value} item(s) need updating`
   return 'Up to date'

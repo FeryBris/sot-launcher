@@ -5,6 +5,7 @@ import { currentGamePath, store } from '../store';
 import { openCharacterPage } from '../api';
 import heroImg from '../assets/hero.png';
 import type { GuildSyncData } from '../types';
+import MyLoot from '../components/MyLoot.vue';
 
 // Same filenames the guild website uses for portraits (gender-race-class.webp,
 // snake_case, e.g. "male-night_elf-death_knight.webp") — copied locally so
@@ -107,18 +108,6 @@ const sortedCharacters = computed<GuildSyncData[]>(() => {
   });
 });
 
-const syncStatusLabel = computed(() => {
-  if (store.guildSyncing) return 'Syncing…';
-  if (store.guildLastSyncedAt) {
-    const time = new Date(store.guildLastSyncedAt).toLocaleTimeString([], {
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-    return `Synced at ${time}`;
-  }
-  return null;
-});
-
 function viewCharacterOnWeb(character: GuildSyncData) {
   void openCharacterPage(store.apiBaseUrl, character.name);
 }
@@ -136,7 +125,6 @@ function viewCharacterOnWeb(character: GuildSyncData) {
     <section class="character">
       <div class="character-header">
         <h2>My Characters</h2>
-        <span v-if="syncStatusLabel" class="sync-status">{{ syncStatusLabel }}</span>
       </div>
 
       <div v-if="!store.guildSyncData.length" class="empty">
@@ -178,22 +166,9 @@ function viewCharacterOnWeb(character: GuildSyncData) {
       </template>
     </section>
 
-    <section class="news">
-      <h2>Guild News</h2>
-
-      <div v-if="store.loadingManifest" class="empty">Loading...</div>
-      <div v-else-if="store.manifestError" class="empty error">
-        Couldn't reach the guild server: {{ store.manifestError }}
-      </div>
-      <div v-else-if="!store.manifest?.news.length" class="empty">No news yet.</div>
-
-      <article v-for="item in store.manifest?.news" :key="item.title + item.date" class="news-item">
-        <div class="news-header">
-          <h3>{{ item.title }}</h3>
-          <span class="news-date">{{ item.date }}</span>
-        </div>
-        <p>{{ item.body }}</p>
-      </article>
+    <section class="loot">
+      <h2>My Loot</h2>
+      <MyLoot />
     </section>
   </div>
 </template>
@@ -362,12 +337,6 @@ function viewCharacterOnWeb(character: GuildSyncData) {
   background: rgba(14, 17, 22, 1);
 }
 
-.sync-status {
-  font-size: 11px;
-  color: var(--text-dim);
-  flex-shrink: 0;
-}
-
 .hint {
   margin: 8px 0 0;
   font-size: 11px;
@@ -378,7 +347,7 @@ function viewCharacterOnWeb(character: GuildSyncData) {
   color: var(--danger);
 }
 
-.news h2 {
+.loot h2 {
   font-size: 14px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -394,38 +363,5 @@ function viewCharacterOnWeb(character: GuildSyncData) {
 
 .empty.error {
   color: var(--danger);
-}
-
-.news-item {
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 14px 16px;
-  margin-bottom: 10px;
-}
-
-.news-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 12px;
-}
-
-.news-header h3 {
-  margin: 0;
-  font-size: 14px;
-}
-
-.news-date {
-  font-size: 11px;
-  color: var(--text-dim);
-  flex-shrink: 0;
-}
-
-.news-item p {
-  margin: 6px 0 0;
-  font-size: 12px;
-  color: var(--text-dim);
-  line-height: 1.5;
 }
 </style>

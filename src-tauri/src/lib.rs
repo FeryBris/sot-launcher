@@ -156,6 +156,7 @@ pub fn run() {
       commands::sync_guild_data_to_web,
       commands::get_guild_roster,
       commands::sync_guild_roster_to_web,
+      commands::get_my_loot,
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

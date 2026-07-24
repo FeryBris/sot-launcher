@@ -270,6 +270,32 @@ pub async fn sync_guild_roster_to_web(app: AppHandle, state: State<'_, AppState>
     Ok(())
 }
 
+/// Fetches the signed-in user's own characters' loot, grouped by raid, for
+/// the "My Loot" tab. Relayed as raw JSON rather than a typed struct —
+/// unlike the addon-file readers, this data never gets inspected or
+/// transformed on the Rust side, just fetched and handed to the frontend.
+#[tauri::command]
+pub async fn get_my_loot(app: AppHandle, state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+    let s = settings::load_settings(&app)?;
+    let token = s
+        .discord_token
+        .as_deref()
+        .filter(|t| !t.is_empty())
+        .ok_or_else(|| "sign in with Discord first".to_string())?;
+
+    let url = format!("{}/my-loot", crate::config::API_BASE_URL.trim_end_matches('/'));
+    let req = state.http.get(&url)
+        .bearer_auth(token)
+        .header("X-API-KEY", crate::config::API_KEY)
+        .header("Accept", "application/json");
+
+    let resp = req.send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {} while fetching loot", resp.status()));
+    }
+    resp.json().await.map_err(|e| e.to_string())
+}
+
 #[derive(serde::Deserialize)]
 struct PairResponse {
     token: String,

@@ -7,6 +7,7 @@ import type {
   GuildSyncData,
   InstalledState,
   Manifest,
+  MyLootResponse,
   Settings,
   SyncProgress,
 } from './types'
@@ -45,6 +46,11 @@ interface Store {
   guildRosterSyncing: boolean
   guildRosterSyncError: string
   guildRosterLastSyncedAt: number | null
+  /** The signed-in user's own characters' loot, grouped by raid — fetched
+   *  once (not polled; raid loot only ever changes after a raid night). */
+  myLoot: MyLootResponse | null
+  myLootLoading: boolean
+  myLootError: string
 }
 
 export const store = reactive<Store>({
@@ -79,6 +85,9 @@ export const store = reactive<Store>({
   guildRosterSyncing: false,
   guildRosterSyncError: '',
   guildRosterLastSyncedAt: null,
+  myLoot: null,
+  myLootLoading: false,
+  myLootError: '',
 })
 
 /** Active confirm-dialog request, rendered by <ConfirmDialog> mounted once at the app root. */
@@ -181,6 +190,7 @@ export async function init() {
     store.discordError = ''
     void maybeAutoSyncGuildData()
     void maybeAutoSyncGuildRoster()
+    void refreshMyLoot()
   })
   discordPairErrorUnlisten = await api.onDiscordPairError((message) => {
     store.discordError = message
@@ -192,6 +202,26 @@ export async function init() {
   await refreshGuildRoster()
   void maybeAutoSyncGuildRoster()
   startGuildSyncPolling()
+  void refreshMyLoot()
+}
+
+/** Fetches the signed-in user's own loot, grouped by raid — not polled,
+ *  since raid loot only ever changes after a raid night; the "My Loot"
+ *  tab can call this again to manually refresh. */
+export async function refreshMyLoot() {
+  if (!store.settings.discordToken) {
+    store.myLoot = null
+    return
+  }
+  store.myLootLoading = true
+  store.myLootError = ''
+  try {
+    store.myLoot = await api.getMyLoot()
+  } catch (e) {
+    store.myLootError = String(e)
+  } finally {
+    store.myLootLoading = false
+  }
 }
 
 /** Re-reads the SoTGuildSync addon's SavedVariables snapshot, if any. */
