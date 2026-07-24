@@ -1,32 +1,38 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { PhPlay } from '@phosphor-icons/vue'
-import { currentGamePath, pendingCount as computePendingCount, playNow, store, syncNow } from '../store'
+import { computed } from 'vue';
+import { PhPlay } from '@phosphor-icons/vue';
+import {
+  currentGamePath,
+  pendingCount as computePendingCount,
+  playNow,
+  store,
+  syncNow,
+} from '../store';
 
-const pendingCount = computed(computePendingCount)
+const pendingCount = computed(computePendingCount);
 
-const canPlay = computed(() => !!currentGamePath() && pendingCount.value === 0 && !store.syncing)
-const canSync = computed(() => !!currentGamePath() && !!store.manifest && !store.syncing)
+const canPlay = computed(() => !!currentGamePath() && pendingCount.value === 0 && !store.syncing);
+const canSync = computed(() => !!currentGamePath() && !!store.manifest && !store.syncing);
 
 async function play() {
-  await playNow()
+  await playNow();
 }
 
 function statusLabel() {
-  if (!currentGamePath()) return 'Set your game folder in Settings first'
+  if (!currentGamePath()) return 'Set your game folder in Settings first';
   if (store.syncing && store.syncProgress) {
-    return `${store.syncProgress.stage} ${store.syncProgress.item} (${store.syncProgress.current}/${store.syncProgress.total})`
+    return `${store.syncProgress.stage} ${store.syncProgress.item} (${store.syncProgress.current}/${store.syncProgress.total})`;
   }
-  if (store.syncing) return 'Syncing...'
+  if (store.syncing) return 'Syncing...';
   if (store.guildSyncing) {
     return store.guildSyncData.length === 1
       ? `Syncing ${store.guildSyncData[0].name}...`
-      : `Syncing ${store.guildSyncData.length} characters...`
+      : `Syncing ${store.guildSyncData.length} characters...`;
   }
-  if (store.guildRosterSyncing) return 'Syncing guild roster...'
-  if (store.manifestError) return `Guild server error: ${store.manifestError}`
-  if (pendingCount.value > 0) return `${pendingCount.value} item(s) need updating`
-  return 'Up to date'
+  if (store.guildRosterSyncing) return 'Syncing guild roster...';
+  if (store.manifestError) return `Guild server error: ${store.manifestError}`;
+  if (pendingCount.value > 0) return `${pendingCount.value} item(s) need updating`;
+  return 'Up to date';
 }
 </script>
 
@@ -38,7 +44,11 @@ function statusLabel() {
       <div v-if="store.syncing" class="progress-track">
         <div
           class="progress-fill"
-          :style="{ width: store.syncProgress ? `${(store.syncProgress.current / Math.max(store.syncProgress.total, 1)) * 100}%` : '10%' }"
+          :style="{
+            width: store.syncProgress
+              ? `${(store.syncProgress.current / Math.max(store.syncProgress.total, 1)) * 100}%`
+              : '10%',
+          }"
         />
       </div>
     </div>
@@ -49,7 +59,7 @@ function statusLabel() {
       </button>
       <button class="play-btn" :disabled="!canPlay" @click="play">
         Play
-        <PhPlay :size="16" weight="fill" />
+        <PhPlay :size="16" weight="duotone" />
       </button>
     </div>
   </footer>

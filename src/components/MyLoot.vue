@@ -40,6 +40,15 @@ function responseColor(name: string | null): string | undefined {
   return (name && RESPONSE_COLOR[name]) || undefined;
 }
 
+// Short labels for the per-instance totals row, in the order the user
+// wants them displayed (BIS, MS, SM, OS).
+const RESPONSE_ORDER: { key: string; label: string }[] = [
+  { key: 'BIS/Need', label: 'BIS' },
+  { key: 'Mainspec/Need', label: 'MS' },
+  { key: 'Small Upgrade but not BiS', label: 'SM' },
+  { key: 'Offspec/Greed', label: 'OS' },
+];
+
 // Same abbreviation -> image convention as the website's own
 // InstancePortrait.vue/_Portrait.module.scss.
 const INSTANCE_IMAGE: Record<string, string> = {
@@ -71,6 +80,23 @@ const activeCharacter = computed(() => characters.value[activeCharacterIndex.val
 const activeInstance = computed<MyLootInstance | null>(
   () => activeCharacter.value?.instances[activeInstanceIndex.value] ?? null
 );
+
+// Sums each loot's count (not just entry count, since duplicate loots
+// already collapse into one entry with a count) per response type, for
+// the active instance's "Total: 3 2 4 5" summary.
+const responseTotals = computed(() => {
+  const totals: Record<string, number> = {};
+  for (const loot of activeInstance.value?.loots ?? []) {
+    const name = loot.response?.name;
+    if (!name) continue;
+    totals[name] = (totals[name] ?? 0) + loot.count;
+  }
+  return RESPONSE_ORDER.map((r) => ({
+    ...r,
+    count: totals[r.key] ?? 0,
+    color: RESPONSE_COLOR[r.key],
+  }));
+});
 </script>
 
 <template>
@@ -96,7 +122,7 @@ const activeInstance = computed<MyLootInstance | null>(
 
       <div class="loot-body">
         <div class="instance-column">
-          <h3 class="column-title">Raids:</h3>
+          <h3 class="column-title">Raids</h3>
           <ul class="instance-list">
             <li
               v-for="(instance, index) in activeCharacter?.instances ?? []"
@@ -125,10 +151,19 @@ const activeInstance = computed<MyLootInstance | null>(
         </div>
 
         <div class="loot-column">
-          <h3 v-if="activeInstance" class="column-title">
-            {{ activeInstance.name
-            }}<span v-if="activeInstance.tier"> ({{ activeInstance.tier }})</span>
-          </h3>
+          <div v-if="activeInstance" class="loot-header">
+            <h3 class="column-title">
+              {{ activeInstance.name
+              }}<span v-if="activeInstance.tier"> ({{ activeInstance.tier }})</span>
+            </h3>
+            <div class="loot-totals">
+              <span class="loot-totals-label">Total:</span>
+              <template v-for="(total, index) in responseTotals" :key="total.key">
+                <span class="loot-totals-divider" v-if="index > 0">·</span>
+                <span :style="{ color: total.color }" :title="total.label">{{ total.count }}</span>
+              </template>
+            </div>
+          </div>
           <div class="loot-list">
             <div v-if="!activeInstance || !activeInstance.loots.length" class="empty">
               No loot from this instance.
@@ -232,6 +267,39 @@ const activeInstance = computed<MyLootInstance | null>(
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.loot-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.loot-header .column-title {
+  margin-bottom: 0;
+  min-width: 0;
+}
+
+.loot-totals {
+  flex-shrink: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.loot-totals-label {
+  color: var(--text-dim);
+  font-weight: 400;
+  margin-right: 2px;
+}
+
+.loot-totals-divider {
+  color: var(--text-dim);
+  font-weight: 400;
 }
 
 .instance-list {
