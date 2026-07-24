@@ -28,7 +28,7 @@ export const store = reactive<Store>({
   settings: {
     gamePath: null,
     launchCommand: null,
-    closeOnLaunch: false,
+    hideOnLaunch: false,
     autoLaunch: false,
     apiBaseUrl: '',
     apiKey: null,
@@ -153,8 +153,8 @@ export async function saveLaunchCommand(command: string) {
   store.settings = await api.setLaunchCommand(command)
 }
 
-export async function saveCloseOnLaunch(enabled: boolean) {
-  store.settings = await api.setCloseOnLaunch(enabled)
+export async function saveHideOnLaunch(enabled: boolean) {
+  store.settings = await api.setHideOnLaunch(enabled)
 }
 
 export async function saveAutoLaunch(enabled: boolean) {

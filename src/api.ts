@@ -30,8 +30,8 @@ export function setLaunchCommand(command: string): Promise<Settings> {
   return invoke('set_launch_command', { command })
 }
 
-export function setCloseOnLaunch(enabled: boolean): Promise<Settings> {
-  return invoke('set_close_on_launch', { enabled })
+export function setHideOnLaunch(enabled: boolean): Promise<Settings> {
+  return invoke('set_hide_on_launch', { enabled })
 }
 
 export function setAutoLaunch(enabled: boolean): Promise<Settings> {

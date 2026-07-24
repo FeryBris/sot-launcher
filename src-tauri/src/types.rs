@@ -52,8 +52,10 @@ pub struct Settings {
     /// invocation). "{game_path}" is substituted with the configured game folder.
     #[serde(default)]
     pub launch_command: Option<String>,
+    /// If set, the main window is hidden to the system tray (rather than
+    /// left open) once `launch_game` successfully starts the game.
     #[serde(default)]
-    pub close_on_launch: bool,
+    pub hide_on_launch: bool,
     #[serde(default)]
     pub auto_launch: bool,
     #[serde(default = "default_api_base_url")]

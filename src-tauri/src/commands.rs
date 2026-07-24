@@ -2,7 +2,7 @@ use crate::settings;
 use crate::sync;
 use crate::types::{InstalledState, Manifest, Settings, SyncResult};
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 #[derive(serde::Serialize)]
@@ -62,9 +62,9 @@ pub fn set_launch_command(app: AppHandle, command: String) -> Result<Settings, S
 }
 
 #[tauri::command]
-pub fn set_close_on_launch(app: AppHandle, enabled: bool) -> Result<Settings, String> {
+pub fn set_hide_on_launch(app: AppHandle, enabled: bool) -> Result<Settings, String> {
     let mut s = settings::load_settings(&app)?;
-    s.close_on_launch = enabled;
+    s.hide_on_launch = enabled;
     settings::save_settings(&app, &s)?;
     Ok(s)
 }
@@ -321,8 +321,10 @@ pub fn launch_game(app: AppHandle) -> Result<(), String> {
         })?;
     }
 
-    if s.close_on_launch {
-        app.exit(0);
+    if s.hide_on_launch {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.hide();
+        }
     }
     Ok(())
 }

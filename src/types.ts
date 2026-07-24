@@ -32,7 +32,7 @@ export interface Manifest {
 export interface Settings {
   gamePath: string | null
   launchCommand: string | null
-  closeOnLaunch: boolean
+  hideOnLaunch: boolean
   autoLaunch: boolean
   apiBaseUrl: string
   apiKey: string | null

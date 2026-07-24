@@ -5,7 +5,7 @@ import {
   saveApiBaseUrl,
   saveApiKey,
   saveAutoLaunch,
-  saveCloseOnLaunch,
+  saveHideOnLaunch,
   saveGamePath,
   saveLaunchCommand,
   signInWithDiscord,
@@ -92,8 +92,8 @@ function pickLutrisGame(game: LutrisGame) {
   lutrisGames.value = []
 }
 
-async function onCloseOnLaunchChange(e: Event) {
-  await saveCloseOnLaunch((e.target as HTMLInputElement).checked)
+async function onHideOnLaunchChange(e: Event) {
+  await saveHideOnLaunch((e.target as HTMLInputElement).checked)
 }
 
 async function onAutoLaunchChange(e: Event) {
@@ -153,10 +153,10 @@ async function onAutoLaunchChange(e: Event) {
       <label class="checkbox-row">
         <input
           type="checkbox"
-          :checked="store.settings.closeOnLaunch"
-          @change="onCloseOnLaunchChange"
+          :checked="store.settings.hideOnLaunch"
+          @change="onHideOnLaunchChange"
         />
-        Close the launcher once the game starts
+        Hide the launcher in the system tray once the game starts
       </label>
       <label class="checkbox-row">
         <input

@@ -4,8 +4,21 @@ mod sync;
 mod types;
 
 use commands::AppState;
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager};
 use tauri_plugin_deep_link::DeepLinkExt;
+
+/// Brings the main window back, whether it was hidden (via `hide_on_launch`)
+/// or just minimized by the user/window manager — `show()` alone doesn't
+/// undo the latter.
+fn show_main_window(app: &tauri::AppHandle) {
+  if let Some(window) = app.get_webview_window("main") {
+    let _ = window.unminimize();
+    let _ = window.show();
+    let _ = window.set_focus();
+  }
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -58,6 +71,26 @@ pub fn run() {
         });
       });
 
+      let show_i = MenuItem::with_id(app, "show", "Open", true, None::<&str>)?;
+      let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+      let tray_menu = Menu::with_items(app, &[&show_i, &quit_i])?;
+
+      TrayIconBuilder::new()
+        .icon(app.default_window_icon().unwrap().clone())
+        .menu(&tray_menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+          "show" => show_main_window(app),
+          "quit" => app.exit(0),
+          _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+          if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+            show_main_window(tray.app_handle());
+          }
+        })
+        .build(app)?;
+
       Ok(())
     })
     .plugin(tauri_plugin_dialog::init())
@@ -71,7 +104,7 @@ pub fn run() {
       commands::set_api_base_url,
       commands::set_api_key,
       commands::set_launch_command,
-      commands::set_close_on_launch,
+      commands::set_hide_on_launch,
       commands::set_auto_launch,
       commands::pick_game_folder,
       commands::fetch_manifest,
