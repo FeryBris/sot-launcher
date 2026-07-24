@@ -239,6 +239,9 @@ export interface MyLootEntry {
 export interface MyLootInstance {
   id: number | null
   name: string
+  /** Same abbreviation convention as the website's InstancePortrait.vue
+   *  (e.g. "IC", "ToC", "Naxx") — used to look up a banner image. */
+  abbreviation: string | null
   lastLootedAt: FormattedDate | null
   loots: MyLootEntry[]
 }

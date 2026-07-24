@@ -4,6 +4,15 @@ import { store } from '../store'
 import type { MyLootInstance } from '../types'
 import LoadingSpinner from './LoadingSpinner.vue'
 
+import naxxImg from '../assets/instances/naxxramas.webp'
+import obsidianSanctumImg from '../assets/instances/the_obsidian_sanctum.webp'
+import eyeOfEternityImg from '../assets/instances/the_eye_of_eternity.webp'
+import voaImg from '../assets/instances/naxx_os_eo_e.webp'
+import ulduarImg from '../assets/instances/ulduar.webp'
+import trialOfTheCrusaderImg from '../assets/instances/trial_of_the_crusader.webp'
+import icecrownCitadelImg from '../assets/instances/icecrown_citadel.webp'
+import onyxiaLairImg from '../assets/instances/onyxia_lair.webp'
+
 const QUALITY_COLOR: Record<string, string> = {
   Poor: '#9d9d9d',
   Common: '#ffffff',
@@ -14,6 +23,22 @@ const QUALITY_COLOR: Record<string, string> = {
 }
 function qualityColor(quality: string | null): string {
   return (quality && QUALITY_COLOR[quality]) || '#c9cdd6'
+}
+
+// Same abbreviation -> image convention as the website's own
+// InstancePortrait.vue/_Portrait.module.scss.
+const INSTANCE_IMAGE: Record<string, string> = {
+  Naxx: naxxImg,
+  OS: obsidianSanctumImg,
+  EoE: eyeOfEternityImg,
+  VoA: voaImg,
+  UD: ulduarImg,
+  ToC: trialOfTheCrusaderImg,
+  IC: icecrownCitadelImg,
+  OL: onyxiaLairImg,
+}
+function instanceImage(abbreviation: string | null): string | undefined {
+  return (abbreviation && INSTANCE_IMAGE[abbreviation]) || undefined
 }
 
 const characters = computed(() => store.myLoot?.characters ?? [])
@@ -62,10 +87,18 @@ const activeInstance = computed<MyLootInstance | null>(
               :class="{ active: index === activeInstanceIndex }"
               @click="activeInstanceIndex = index"
             >
-              <span class="instance-name">{{ instance.name }}</span>
-              <span v-if="instance.lastLootedAt?.stringDate" class="instance-date">
-                {{ instance.lastLootedAt.stringDate }}
-              </span>
+              <img
+                v-if="instanceImage(instance.abbreviation)"
+                class="instance-image"
+                :src="instanceImage(instance.abbreviation) ?? ''"
+                alt=""
+              />
+              <div class="instance-text">
+                <span class="instance-name">{{ instance.name }}</span>
+                <span v-if="instance.lastLootedAt?.stringDate" class="instance-date">
+                  {{ instance.lastLootedAt.stringDate }}
+                </span>
+              </div>
             </button>
           </li>
         </ul>
@@ -139,6 +172,11 @@ const activeInstance = computed<MyLootInstance | null>(
   display: flex;
   gap: 14px;
   min-height: 0;
+  /* Both lists share these so "5 rows tall" means the same pixel height
+     in each — row height/gap are only ever changed here. */
+  --row-height: 56px;
+  --row-gap: 6px;
+  --list-max-height: calc(var(--row-height) * 5 + var(--row-gap) * 4);
 }
 
 .instance-list {
@@ -147,23 +185,24 @@ const activeInstance = computed<MyLootInstance | null>(
   padding: 0;
   width: 200px;
   flex-shrink: 0;
-  max-height: 320px;
+  max-height: var(--list-max-height);
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--row-gap);
 }
 
 .instance-item {
   width: 100%;
+  height: var(--row-height);
   text-align: left;
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 8px 10px;
+  padding: 6px 10px;
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: center;
+  gap: 8px;
 }
 
 .instance-item.active {
@@ -171,9 +210,28 @@ const activeInstance = computed<MyLootInstance | null>(
   background: var(--bg-elevated);
 }
 
+.instance-image {
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.instance-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
 .instance-name {
   font-size: 12px;
   font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .instance-date {
@@ -184,12 +242,15 @@ const activeInstance = computed<MyLootInstance | null>(
 .loot-list {
   flex: 1;
   min-width: 0;
+  max-height: var(--list-max-height);
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--row-gap);
 }
 
 .loot-row {
+  height: var(--row-height);
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);
