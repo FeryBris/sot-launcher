@@ -1,17 +1,17 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
-import { store } from '../store'
-import type { MyLootInstance } from '../types'
-import LoadingSpinner from './LoadingSpinner.vue'
+import { computed, ref, watch } from 'vue';
+import { store } from '../store';
+import type { MyLootInstance } from '../types';
+import LoadingSpinner from './LoadingSpinner.vue';
 
-import naxxImg from '../assets/instances/naxxramas.webp'
-import obsidianSanctumImg from '../assets/instances/the_obsidian_sanctum.webp'
-import eyeOfEternityImg from '../assets/instances/the_eye_of_eternity.webp'
-import voaImg from '../assets/instances/naxx_os_eo_e.webp'
-import ulduarImg from '../assets/instances/ulduar.webp'
-import trialOfTheCrusaderImg from '../assets/instances/trial_of_the_crusader.webp'
-import icecrownCitadelImg from '../assets/instances/icecrown_citadel.webp'
-import onyxiaLairImg from '../assets/instances/onyxia_lair.webp'
+import naxxImg from '../assets/instances/naxxramas.webp';
+import obsidianSanctumImg from '../assets/instances/the_obsidian_sanctum.webp';
+import eyeOfEternityImg from '../assets/instances/the_eye_of_eternity.webp';
+import voaImg from '../assets/instances/naxx_os_eo_e.webp';
+import ulduarImg from '../assets/instances/ulduar.webp';
+import trialOfTheCrusaderImg from '../assets/instances/trial_of_the_crusader.webp';
+import icecrownCitadelImg from '../assets/instances/icecrown_citadel.webp';
+import onyxiaLairImg from '../assets/instances/onyxia_lair.webp';
 
 const QUALITY_COLOR: Record<string, string> = {
   Poor: '#9d9d9d',
@@ -20,9 +20,9 @@ const QUALITY_COLOR: Record<string, string> = {
   Rare: '#0070dd',
   Epic: '#a335ee',
   Legendary: '#ff8000',
-}
+};
 function qualityColor(quality: string | null): string {
-  return (quality && QUALITY_COLOR[quality]) || '#c9cdd6'
+  return (quality && QUALITY_COLOR[quality]) || '#c9cdd6';
 }
 
 // Same colors as the website's _Typography.module.scss response classes
@@ -35,9 +35,9 @@ const RESPONSE_COLOR: Record<string, string> = {
   'Mainspec/Need': '#1eff00',
   'Offspec/Greed': '#ff7c0a',
   'Small Upgrade but not BiS': '#00ccff',
-}
+};
 function responseColor(name: string | null): string | undefined {
-  return (name && RESPONSE_COLOR[name]) || undefined
+  return (name && RESPONSE_COLOR[name]) || undefined;
 }
 
 // Same abbreviation -> image convention as the website's own
@@ -51,26 +51,26 @@ const INSTANCE_IMAGE: Record<string, string> = {
   ToC: trialOfTheCrusaderImg,
   IC: icecrownCitadelImg,
   OL: onyxiaLairImg,
-}
+};
 function instanceImage(abbreviation: string | null): string | undefined {
-  return (abbreviation && INSTANCE_IMAGE[abbreviation]) || undefined
+  return (abbreviation && INSTANCE_IMAGE[abbreviation]) || undefined;
 }
 
-const characters = computed(() => store.myLoot?.characters ?? [])
+const characters = computed(() => store.myLoot?.characters ?? []);
 
-const activeCharacterIndex = ref(0)
-const activeInstanceIndex = ref(0)
+const activeCharacterIndex = ref(0);
+const activeInstanceIndex = ref(0);
 
 // Whenever the character tab changes, jump back to that character's most
 // recently-looted instance (instances already arrive sorted newest-first).
 watch(activeCharacterIndex, () => {
-  activeInstanceIndex.value = 0
-})
+  activeInstanceIndex.value = 0;
+});
 
-const activeCharacter = computed(() => characters.value[activeCharacterIndex.value] ?? null)
+const activeCharacter = computed(() => characters.value[activeCharacterIndex.value] ?? null);
 const activeInstance = computed<MyLootInstance | null>(
-  () => activeCharacter.value?.instances[activeInstanceIndex.value] ?? null,
-)
+  () => activeCharacter.value?.instances[activeInstanceIndex.value] ?? null
+);
 </script>
 
 <template>
@@ -95,57 +95,73 @@ const activeInstance = computed<MyLootInstance | null>(
       </div>
 
       <div class="loot-body">
-        <ul class="instance-list">
-          <li v-for="(instance, index) in activeCharacter?.instances ?? []" :key="instance.id ?? index">
-            <button
-              class="instance-item"
-              :class="{ active: index === activeInstanceIndex }"
-              @click="activeInstanceIndex = index"
+        <div class="instance-column">
+          <h3 class="column-title">Raids:</h3>
+          <ul class="instance-list">
+            <li
+              v-for="(instance, index) in activeCharacter?.instances ?? []"
+              :key="instance.id ?? index"
             >
+              <button
+                class="instance-item"
+                :class="{ active: index === activeInstanceIndex }"
+                @click="activeInstanceIndex = index"
+              >
+                <img
+                  v-if="instanceImage(instance.abbreviation)"
+                  class="instance-image"
+                  :src="instanceImage(instance.abbreviation) ?? ''"
+                  alt=""
+                />
+                <div class="instance-text">
+                  <span class="instance-name">{{ instance.abbreviation ?? instance.name }}</span>
+                  <span v-if="instance.lastLootedAt?.stringDate" class="instance-date">
+                    {{ instance.lastLootedAt.stringDate }}
+                  </span>
+                </div>
+              </button>
+            </li>
+          </ul>
+        </div>
+
+        <div class="loot-column">
+          <h3 v-if="activeInstance" class="column-title">
+            {{ activeInstance.name
+            }}<span v-if="activeInstance.tier"> ({{ activeInstance.tier }})</span>
+          </h3>
+          <div class="loot-list">
+            <div v-if="!activeInstance || !activeInstance.loots.length" class="empty">
+              No loot from this instance.
+            </div>
+            <div v-for="loot in activeInstance?.loots ?? []" :key="loot.id" class="loot-row">
               <img
-                v-if="instanceImage(instance.abbreviation)"
-                class="instance-image"
-                :src="instanceImage(instance.abbreviation) ?? ''"
+                v-if="loot.item.media?.full_path"
+                class="loot-icon"
+                :src="loot.item.media.full_path"
                 alt=""
+                :style="{ borderColor: qualityColor(loot.item.quality) }"
               />
-              <div class="instance-text">
-                <span class="instance-name">{{ instance.name }}</span>
-                <span v-if="instance.lastLootedAt?.stringDate" class="instance-date">
-                  {{ instance.lastLootedAt.stringDate }}
+              <div class="loot-info">
+                <span class="loot-name" :style="{ color: qualityColor(loot.item.quality) }">
+                  {{ loot.item.name }}
+                </span>
+                <span class="loot-sub">
+                  <span v-if="loot.item.level" class="loot-ilvl">ilvl {{ loot.item.level }}</span>
+                  <template v-if="loot.response?.name">
+                    ·
+                    <span :style="{ color: responseColor(loot.response.name) }">{{
+                      loot.response.name
+                    }}</span>
+                  </template>
                 </span>
               </div>
-            </button>
-          </li>
-        </ul>
-
-        <div class="loot-list">
-          <div v-if="!activeInstance || !activeInstance.loots.length" class="empty">
-            No loot from this instance.
-          </div>
-          <div v-for="loot in activeInstance?.loots ?? []" :key="loot.id" class="loot-row">
-            <img
-              v-if="loot.item.media?.full_path"
-              class="loot-icon"
-              :src="loot.item.media.full_path"
-              alt=""
-              :style="{ borderColor: qualityColor(loot.item.quality) }"
-            />
-            <div class="loot-info">
-              <span class="loot-name" :style="{ color: qualityColor(loot.item.quality) }">
-                {{ loot.item.name }}
-              </span>
-              <span class="loot-sub">
-                <span v-if="loot.item.level" class="loot-ilvl">ilvl {{ loot.item.level }}</span>
-                <template v-if="loot.response?.name">
-                  ·
-                  <span :style="{ color: responseColor(loot.response.name) }">{{ loot.response.name }}</span>
-                </template>
-              </span>
-            </div>
-            <div v-if="loot.count > 1" class="loot-count" title="Times looted">×{{ loot.count }}</div>
-            <div v-if="loot.givenAt?.day" class="loot-date" :title="loot.givenAt.stringDate">
-              <span class="loot-date-day">{{ loot.givenAt.day }}.{{ loot.givenAt.month }}.</span>
-              <span class="loot-date-year">{{ loot.givenAt.year }}</span>
+              <div v-if="loot.count > 1" class="loot-count" title="Times looted">
+                ×{{ loot.count }}
+              </div>
+              <div v-if="loot.givenAt?.day" class="loot-date" :title="loot.givenAt.stringDate">
+                <span class="loot-date-day">{{ loot.givenAt.day }}.{{ loot.givenAt.month }}.</span>
+                <span class="loot-date-year">{{ loot.givenAt.year }}</span>
+              </div>
             </div>
           </div>
         </div>
@@ -197,11 +213,30 @@ const activeInstance = computed<MyLootInstance | null>(
   --list-max-height: calc(var(--row-height) * 5 + var(--row-gap) * 4);
 }
 
+.instance-column {
+  width: 200px;
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.loot-column {
+  flex: 1;
+  min-width: 0;
+}
+
+.column-title {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .instance-list {
   list-style: none;
   margin: 0;
-  width: 200px;
-  flex-shrink: 0;
   max-height: var(--list-max-height);
   overflow-y: auto;
   display: flex;
@@ -217,7 +252,7 @@ const activeInstance = computed<MyLootInstance | null>(
   width: 100%;
   height: var(--row-height);
   text-align: left;
-  background: var(--bg-panel);
+  background: color-mix(in srgb, var(--bg-panel) 50%, transparent);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 6px 10px;
@@ -261,8 +296,6 @@ const activeInstance = computed<MyLootInstance | null>(
 }
 
 .loot-list {
-  flex: 1;
-  min-width: 0;
   max-height: var(--list-max-height);
   overflow-y: auto;
   display: flex;
@@ -299,7 +332,7 @@ const activeInstance = computed<MyLootInstance | null>(
 
 .loot-row {
   height: var(--row-height);
-  background: var(--bg-panel);
+  background: color-mix(in srgb, var(--bg-panel) 50%, transparent);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 8px 12px;
@@ -355,7 +388,7 @@ const activeInstance = computed<MyLootInstance | null>(
 
 .loot-date {
   flex-shrink: 0;
-  background: var(--bg-elevated);
+  background: color-mix(in srgb, var(--bg-elevated) 50%, transparent);
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 4px 8px;
