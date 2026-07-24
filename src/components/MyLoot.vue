@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { store } from '../store';
-import type { MyLootInstance } from '../types';
+import type { MyLootInstance, MyLootItem } from '../types';
 import LoadingSpinner from './LoadingSpinner.vue';
 
 import naxxImg from '../assets/instances/naxxramas.webp';
@@ -63,6 +63,24 @@ const INSTANCE_IMAGE: Record<string, string> = {
 };
 function instanceImage(abbreviation: string | null): string | undefined {
   return (abbreviation && INSTANCE_IMAGE[abbreviation]) || undefined;
+}
+
+// Same fallback as the website's ItemIconSimple.vue — the hosted media
+// image is preferred, but falls back to rpglogs.com's Wowhead icon
+// mirror (keyed by the same icon filename Blizzard/Wowhead use) when
+// there's no hosted media yet, or the hosted image fails to load.
+function itemIconFallback(item: MyLootItem): string | undefined {
+  return item.media?.original_name
+    ? `https://assets.rpglogs.com/img/warcraft/abilities/${item.media.original_name}`
+    : undefined;
+}
+function itemIconSrc(item: MyLootItem): string | undefined {
+  return item.media?.full_path ?? itemIconFallback(item);
+}
+function onItemIconError(item: MyLootItem, event: Event) {
+  const fallback = itemIconFallback(item);
+  const img = event.target as HTMLImageElement;
+  if (fallback && img.src !== fallback) img.src = fallback;
 }
 
 const characters = computed(() => store.myLoot?.characters ?? []);
@@ -170,11 +188,12 @@ const responseTotals = computed(() => {
             </div>
             <div v-for="loot in activeInstance?.loots ?? []" :key="loot.id" class="loot-row">
               <img
-                v-if="loot.item.media?.full_path"
+                v-if="itemIconSrc(loot.item)"
                 class="loot-icon"
-                :src="loot.item.media.full_path"
+                :src="itemIconSrc(loot.item)"
                 alt=""
                 :style="{ borderColor: qualityColor(loot.item.quality) }"
+                @error="onItemIconError(loot.item, $event)"
               />
               <div class="loot-info">
                 <span class="loot-name" :style="{ color: qualityColor(loot.item.quality) }">
