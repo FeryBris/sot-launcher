@@ -100,15 +100,13 @@ const activeInstance = computed<MyLootInstance | null>(
   () => activeCharacter.value?.instances[activeInstanceIndex.value] ?? null
 );
 
-// Sums each loot's count (not just entry count, since duplicate loots
-// already collapse into one entry with a count) per response type, for
-// the active instance's "Total: 3 2 4 5" summary.
+// Counts loots per response type, for the active instance's totals row.
 const responseTotals = computed(() => {
   const totals: Record<string, number> = {};
   for (const loot of activeInstance.value?.loots ?? []) {
     const name = loot.response?.name;
     if (!name) continue;
-    totals[name] = (totals[name] ?? 0) + loot.count;
+    totals[name] = (totals[name] ?? 0) + 1;
   }
   return RESPONSE_ORDER.map((r) => ({
     ...r,
@@ -176,7 +174,6 @@ const responseTotals = computed(() => {
               }}<span v-if="activeInstance.tier"> ({{ activeInstance.tier }})</span>
             </h3>
             <div class="loot-totals">
-              <span class="loot-totals-label">Total:</span>
               <template v-for="(total, index) in responseTotals" :key="total.key">
                 <span class="loot-totals-divider" v-if="index > 0">·</span>
                 <span :style="{ color: total.color }" :title="total.label">{{ total.count }}</span>
@@ -215,9 +212,6 @@ const responseTotals = computed(() => {
                     }}</span>
                   </template>
                 </span>
-              </div>
-              <div v-if="loot.count > 1" class="loot-count" title="Times looted">
-                ×{{ loot.count }}
               </div>
               <div v-if="loot.givenAt?.day" class="loot-date" :title="loot.givenAt.stringDate">
                 <span class="loot-date-day">{{ loot.givenAt.day }}.{{ loot.givenAt.month }}.</span>
@@ -483,17 +477,6 @@ const responseTotals = computed(() => {
 
 .loot-ilvl {
   color: var(--text-dim);
-}
-
-.loot-count {
-  flex-shrink: 0;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 4px 8px;
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--accent-strong);
 }
 
 .loot-date {

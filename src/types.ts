@@ -227,11 +227,6 @@ export interface MyLootItem {
 export interface MyLootEntry {
   id: number
   item: MyLootItem
-  /** How many times this exact item was looted within this instance —
-   *  duplicates collapse into one entry server-side rather than listing
-   *  each occurrence separately. */
-  count: number
-  /** The most recent of the (possibly several, if count > 1) times this was looted. */
   givenAt: FormattedDate | null
   response: { id: number | null; label: string | null; name: string | null }
 }
