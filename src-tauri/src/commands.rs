@@ -14,12 +14,31 @@ pub struct CombinedSyncResult {
 
 pub struct AppState {
     pub http: reqwest::Client,
+    /// The tray menu's first item ("Play"/"Update") — set once during
+    /// `.setup()` in lib.rs, mutated later via `set_tray_primary_label`
+    /// whenever the frontend's update-available state changes.
+    pub tray_primary_item: std::sync::Mutex<Option<tauri::menu::MenuItem<tauri::Wry>>>,
 }
 
 impl Default for AppState {
     fn default() -> Self {
-        Self { http: reqwest::Client::new() }
+        Self {
+            http: reqwest::Client::new(),
+            tray_primary_item: std::sync::Mutex::new(None),
+        }
     }
+}
+
+/// Relabels the tray's first menu item ("Play" <-> "Update") — the
+/// frontend already knows whether an update is available (it does the
+/// actual update check), this just mirrors that onto the native tray menu.
+#[tauri::command]
+pub fn set_tray_primary_label(state: State<'_, AppState>, label: String) -> Result<(), String> {
+    let guard = state.tray_primary_item.lock().map_err(|e| e.to_string())?;
+    if let Some(item) = guard.as_ref() {
+        item.set_text(label).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -28,28 +47,27 @@ pub fn get_settings(app: AppHandle) -> Result<Settings, String> {
 }
 
 #[tauri::command]
-pub fn set_game_path(app: AppHandle, path: String) -> Result<Settings, String> {
+pub fn set_game_path_windows(app: AppHandle, path: String) -> Result<Settings, String> {
     let mut s = settings::load_settings(&app)?;
-    s.game_path = Some(path);
+    s.game_path_windows = Some(path);
     settings::save_settings(&app, &s)?;
     Ok(s)
 }
 
 #[tauri::command]
-pub fn set_api_base_url(app: AppHandle, url: String) -> Result<Settings, String> {
+pub fn set_game_path_linux(app: AppHandle, path: String) -> Result<Settings, String> {
     let mut s = settings::load_settings(&app)?;
-    s.api_base_url = url;
+    s.game_path_linux = Some(path);
     settings::save_settings(&app, &s)?;
     Ok(s)
 }
 
+/// The guild site's base URL — safe to expose to the frontend (it's a
+/// public address, not a secret) for building browser-open links. The
+/// API key itself never leaves the Rust side.
 #[tauri::command]
-pub fn set_api_key(app: AppHandle, key: String) -> Result<Settings, String> {
-    let mut s = settings::load_settings(&app)?;
-    let trimmed = key.trim();
-    s.api_key = if trimmed.is_empty() { None } else { Some(trimmed.to_string()) };
-    settings::save_settings(&app, &s)?;
-    Ok(s)
+pub fn get_api_base_url() -> &'static str {
+    crate::config::API_BASE_URL
 }
 
 #[tauri::command]
@@ -65,6 +83,14 @@ pub fn set_launch_command(app: AppHandle, command: String) -> Result<Settings, S
 pub fn set_hide_on_launch(app: AppHandle, enabled: bool) -> Result<Settings, String> {
     let mut s = settings::load_settings(&app)?;
     s.hide_on_launch = enabled;
+    settings::save_settings(&app, &s)?;
+    Ok(s)
+}
+
+#[tauri::command]
+pub fn set_close_to_tray(app: AppHandle, enabled: bool) -> Result<Settings, String> {
+    let mut s = settings::load_settings(&app)?;
+    s.close_to_tray = enabled;
     settings::save_settings(&app, &s)?;
     Ok(s)
 }
@@ -91,20 +117,12 @@ pub async fn pick_game_folder(app: AppHandle) -> Result<Option<String>, String> 
 }
 
 #[tauri::command]
-pub async fn fetch_manifest(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    api_base_url: String,
-) -> Result<Manifest, String> {
-    let s = settings::load_settings(&app)?;
-    let url = format!("{}/manifest", api_base_url.trim_end_matches('/'));
-    let mut req = state.http.get(&url);
-    if let Some(key) = s.api_key.as_deref().filter(|k| !k.is_empty()) {
-        req = req.header("X-API-KEY", key);
-    }
+pub async fn fetch_manifest(state: State<'_, AppState>) -> Result<Manifest, String> {
+    let url = format!("{}/manifest", crate::config::API_BASE_URL.trim_end_matches('/'));
+    let req = state.http.get(&url).header("X-API-KEY", crate::config::API_KEY);
     let resp = req.send().await.map_err(|e| e.to_string())?;
     if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
-        return Err("Unauthorized: check the API Key in Settings".to_string());
+        return Err("Unauthorized: the launcher's guild API key is invalid — contact an officer".to_string());
     }
     if !resp.status().is_success() {
         return Err(format!("HTTP {} while fetching manifest", resp.status()));
@@ -119,7 +137,7 @@ pub async fn fetch_manifest(
 #[tauri::command]
 pub fn get_installed_state(app: AppHandle, manifest: Manifest) -> Result<InstalledState, String> {
     let s = settings::load_settings(&app)?;
-    let game_path = s.game_path.ok_or_else(|| "no game folder configured".to_string())?;
+    let game_path = s.game_path().ok_or_else(|| "no game folder configured".to_string())?;
     Ok(sync::get_installed_state(&game_path, &manifest))
 }
 
@@ -130,7 +148,7 @@ pub fn get_installed_state(app: AppHandle, manifest: Manifest) -> Result<Install
 #[tauri::command]
 pub fn set_addon_disabled(app: AppHandle, manifest: Manifest, name: String, disabled: bool) -> Result<InstalledState, String> {
     let s = settings::load_settings(&app)?;
-    let game_path = s.game_path.ok_or_else(|| "no game folder configured".to_string())?;
+    let game_path = s.game_path().ok_or_else(|| "no game folder configured".to_string())?;
     sync::set_addon_disabled(&game_path, &name, disabled)?;
     Ok(sync::get_installed_state(&game_path, &manifest))
 }
@@ -141,7 +159,7 @@ pub fn set_addon_disabled(app: AppHandle, manifest: Manifest, name: String, disa
 #[tauri::command]
 pub fn delete_addon(app: AppHandle, manifest: Manifest, name: String) -> Result<InstalledState, String> {
     let mut s = settings::load_settings(&app)?;
-    let game_path = s.game_path.clone().ok_or_else(|| "no game folder configured".to_string())?;
+    let game_path = s.game_path().ok_or_else(|| "no game folder configured".to_string())?;
 
     if let Some(removed) = sync::delete_addon(&game_path, &name)? {
         if removed.kind != "custom" {
@@ -160,7 +178,7 @@ pub fn delete_addon(app: AppHandle, manifest: Manifest, name: String) -> Result<
 #[tauri::command]
 pub fn get_guild_sync_data(app: AppHandle) -> Result<Vec<crate::types::GuildSyncData>, String> {
     let s = settings::load_settings(&app)?;
-    let Some(game_path) = s.game_path else {
+    let Some(game_path) = s.game_path() else {
         return Ok(Vec::new());
     };
     crate::guild_sync::read_guild_sync_data(Path::new(&game_path))
@@ -177,7 +195,7 @@ struct SyncCharactersPayload<'a> {
 #[tauri::command]
 pub async fn sync_guild_data_to_web(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     let s = settings::load_settings(&app)?;
-    let game_path = s.game_path.clone().ok_or_else(|| "no game folder configured".to_string())?;
+    let game_path = s.game_path().ok_or_else(|| "no game folder configured".to_string())?;
     let token = s
         .discord_token
         .as_deref()
@@ -189,11 +207,11 @@ pub async fn sync_guild_data_to_web(app: AppHandle, state: State<'_, AppState>) 
         return Err("no character data found yet — log in as a Stalkers of Time member first".to_string());
     }
 
-    let url = format!("{}/characters/sync", s.api_base_url.trim_end_matches('/'));
-    let mut req = state.http.post(&url).bearer_auth(token).json(&SyncCharactersPayload { characters: &data });
-    if let Some(key) = s.api_key.as_deref().filter(|k| !k.is_empty()) {
-        req = req.header("X-API-KEY", key);
-    }
+    let url = format!("{}/characters/sync", crate::config::API_BASE_URL.trim_end_matches('/'));
+    let req = state.http.post(&url)
+        .bearer_auth(token)
+        .header("X-API-KEY", crate::config::API_KEY)
+        .json(&SyncCharactersPayload { characters: &data });
 
     let resp = req.send().await.map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
@@ -226,7 +244,7 @@ pub async fn exchange_pair_code(
     code: String,
 ) -> Result<Settings, String> {
     let mut s = settings::load_settings(app)?;
-    let url = format!("{}/pair", s.api_base_url.trim_end_matches('/'));
+    let url = format!("{}/pair", crate::config::API_BASE_URL.trim_end_matches('/'));
     let resp = http
         .post(&url)
         .header("Accept", "application/json")
@@ -260,7 +278,7 @@ pub async fn clear_discord_login(app: AppHandle, state: State<'_, AppState>) -> 
     let mut s = settings::load_settings(&app)?;
 
     if let Some(token) = s.discord_token.as_deref().filter(|t| !t.is_empty()) {
-        let url = format!("{}/unpair", s.api_base_url.trim_end_matches('/'));
+        let url = format!("{}/unpair", crate::config::API_BASE_URL.trim_end_matches('/'));
         let _ = state
             .http
             .post(&url)
@@ -284,7 +302,7 @@ pub async fn run_sync(
     addon_enabled: std::collections::HashMap<String, bool>,
 ) -> Result<CombinedSyncResult, String> {
     let mut s = settings::load_settings(&app)?;
-    let game_path = s.game_path.clone().ok_or_else(|| "no game folder configured".to_string())?;
+    let game_path = s.game_path().ok_or_else(|| "no game folder configured".to_string())?;
 
     let addons = sync::sync_addons(&app, &game_path, &manifest.addons, &addon_enabled).await;
     let wtf_files = sync::sync_wtf_files(&app, &game_path, &manifest.wtf_files).await;
@@ -335,7 +353,7 @@ fn scan_dir_for_exe(dir: &Path) -> Option<PathBuf> {
 #[tauri::command]
 pub fn launch_game(app: AppHandle) -> Result<(), String> {
     let s = settings::load_settings(&app)?;
-    let game_path = s.game_path.clone().ok_or_else(|| "no game folder configured".to_string())?;
+    let game_path = s.game_path().ok_or_else(|| "no game folder configured".to_string())?;
     let game_root = PathBuf::from(&game_path);
 
     if let Some(custom) = s.launch_command.as_deref().map(str::trim).filter(|c| !c.is_empty()) {

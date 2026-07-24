@@ -9,10 +9,7 @@ import SettingsView from './views/Settings.vue'
 import PlayBar from './components/PlayBar.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import { init as initStore, playNow, signInWithDiscord, store } from './store'
-
-function authHeaders(): Record<string, string> {
-  return store.settings.apiKey ? { 'X-API-KEY': store.settings.apiKey } : {}
-}
+import { onTrayPrimaryClicked, setTrayPrimaryLabel } from './api'
 
 type Tab = 'home' | 'addons' | 'settings'
 
@@ -27,7 +24,7 @@ const updateProgress = ref(0)
 async function checkUpdate() {
   updateState.value = 'checking'
   try {
-    const update = await checkForUpdate({ headers: authHeaders() })
+    const update = await checkForUpdate()
     if (update?.available) {
       updateAvailable.value = update
       updateState.value = 'idle'
@@ -66,17 +63,25 @@ async function installUpdate() {
   }
 }
 
+// Mirrors update-availability onto the native tray menu's first item —
+// the tray itself has no idea whether an update exists, it just relays
+// whatever this side decides.
+watch(updateAvailable, (val) => {
+  void setTrayPrimaryLabel(val ? 'Update' : 'Play')
+}, { immediate: true })
+
 onMounted(async () => {
   appVersion.value = await getVersion()
   await initStore()
   checkUpdate()
 
-  // Registered only after the initial load+check above has already run, so
-  // it can't also fire for that same first settings load (store.settings
-  // goes from its empty default to the real loaded value once here) — only
-  // for genuine later changes (Settings save, Discord pairing, etc.),
-  // instead of leaving a stale error/result sitting there until restart.
-  watch(() => store.settings.apiKey, () => checkUpdate())
+  await onTrayPrimaryClicked(() => {
+    if (updateAvailable.value) {
+      installUpdate()
+    } else {
+      playNow()
+    }
+  })
 
   if (store.settings.autoLaunch) {
     playNow()
@@ -88,8 +93,11 @@ onMounted(async () => {
   <div class="shell">
     <aside class="sidebar">
       <div class="brand">
-        <span class="brand-mark">SoT</span>
-        <span class="brand-name">Launcher</span>
+        <div class="brand-row">
+          <span class="brand-mark">SoT</span>
+          <span class="brand-name">Launcher</span>
+        </div>
+        <div class="version">v{{ appVersion }}</div>
       </div>
 
       <nav class="nav">
@@ -125,7 +133,6 @@ onMounted(async () => {
           <span class="discord-name">{{ store.settings.discordUsername }}</span>
         </div>
         <button v-else class="discord-signin-btn" @click="signInWithDiscord">Sign in</button>
-        <div class="version">v{{ appVersion }}</div>
       </div>
     </aside>
 
@@ -157,11 +164,14 @@ onMounted(async () => {
 }
 
 .brand {
+  padding: 20px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.brand-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 20px 16px;
-  border-bottom: 1px solid var(--border);
 }
 
 .brand-mark {
@@ -308,7 +318,7 @@ onMounted(async () => {
 .version {
   font-size: 11px;
   color: var(--text-dim);
-  text-align: center;
+  margin-top: 4px;
 }
 
 .content {

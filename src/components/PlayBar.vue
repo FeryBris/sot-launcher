@@ -1,18 +1,18 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { pendingCount as computePendingCount, playNow, store, syncNow } from '../store'
+import { currentGamePath, pendingCount as computePendingCount, playNow, store, syncNow } from '../store'
 
 const pendingCount = computed(computePendingCount)
 
-const canPlay = computed(() => !!store.settings.gamePath && pendingCount.value === 0 && !store.syncing)
-const canSync = computed(() => !!store.settings.gamePath && !!store.manifest && !store.syncing)
+const canPlay = computed(() => !!currentGamePath() && pendingCount.value === 0 && !store.syncing)
+const canSync = computed(() => !!currentGamePath() && !!store.manifest && !store.syncing)
 
 async function play() {
   await playNow()
 }
 
 function statusLabel() {
-  if (!store.settings.gamePath) return 'Set your game folder in Settings first'
+  if (!currentGamePath()) return 'Set your game folder in Settings first'
   if (store.syncing && store.syncProgress) {
     return `${store.syncProgress.stage} ${store.syncProgress.item} (${store.syncProgress.current}/${store.syncProgress.total})`
   }

@@ -86,10 +86,22 @@ pub fn read_guild_sync_data(game_path: &Path) -> Result<Vec<GuildSyncData>, Stri
         return Ok(Vec::new());
     }
 
-    let by_name: std::collections::HashMap<String, GuildSyncData> = serde_json::from_str(&json)
+    // Parsed generically first, then each character converted individually
+    // — the addon's own data shape evolves over time (e.g. equipment went
+    // from a flat item-ID array to a richer per-item object), and a single
+    // character whose entry predates a shape change (hasn't logged back in
+    // to get rewritten yet) must never take every other character down
+    // with it.
+    let by_name: std::collections::HashMap<String, serde_json::Value> = serde_json::from_str(&json)
         .map_err(|e| format!("failed to parse guild sync data: {e}"))?;
 
-    let mut characters: Vec<GuildSyncData> = by_name.into_values().collect();
+    let mut characters: Vec<GuildSyncData> = Vec::new();
+    for (name, value) in by_name {
+        match serde_json::from_value::<GuildSyncData>(value) {
+            Ok(data) => characters.push(data),
+            Err(e) => eprintln!("skipping guild sync entry for '{name}': {e}"),
+        }
+    }
     characters.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(characters)
 }

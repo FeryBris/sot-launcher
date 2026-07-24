@@ -1,43 +1,34 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import {
   store,
-  saveApiBaseUrl,
-  saveApiKey,
   saveAutoLaunch,
+  saveCloseToTray,
   saveHideOnLaunch,
   saveGamePath,
   saveLaunchCommand,
   signInWithDiscord,
   signOutDiscord,
 } from '../store'
+import { isWindows } from '../platform'
 import * as api from '../api'
 import type { LutrisGame } from '../types'
 
-const apiUrlDraft = ref(store.settings.apiBaseUrl)
-const apiUrlSaved = ref(false)
-const apiKeyDraft = ref(store.settings.apiKey ?? '')
-const apiKeySaved = ref(false)
 const launchCmdDraft = ref(store.settings.launchCommand ?? '')
 const launchCmdSaved = ref(false)
+
+const platformTab = ref<'windows' | 'linux'>(isWindows() ? 'windows' : 'linux')
+
+/** The folder path for whichever tab is currently selected — not
+ *  necessarily the OS actually running this build, since both tabs stay
+ *  browsable/editable for reference either way. */
+const currentTabGamePath = computed(() =>
+  platformTab.value === 'windows' ? store.settings.gamePathWindows : store.settings.gamePathLinux,
+)
 
 const lutrisGames = ref<LutrisGame[]>([])
 const lutrisLoading = ref(false)
 const lutrisError = ref('')
-
-watch(
-  () => store.settings.apiBaseUrl,
-  (v) => {
-    apiUrlDraft.value = v
-  },
-)
-
-watch(
-  () => store.settings.apiKey,
-  (v) => {
-    apiKeyDraft.value = v ?? ''
-  },
-)
 
 watch(
   () => store.settings.launchCommand,
@@ -49,20 +40,8 @@ watch(
 async function browseGameFolder() {
   const path = await api.pickGameFolder()
   if (path) {
-    await saveGamePath(path)
+    await saveGamePath(path, platformTab.value)
   }
-}
-
-async function saveApiUrl() {
-  await saveApiBaseUrl(apiUrlDraft.value.trim())
-  apiUrlSaved.value = true
-  setTimeout(() => (apiUrlSaved.value = false), 1500)
-}
-
-async function saveApiKeyValue() {
-  await saveApiKey(apiKeyDraft.value.trim())
-  apiKeySaved.value = true
-  setTimeout(() => (apiKeySaved.value = false), 1500)
 }
 
 async function saveLaunchCmd() {
@@ -96,6 +75,10 @@ async function onHideOnLaunchChange(e: Event) {
   await saveHideOnLaunch((e.target as HTMLInputElement).checked)
 }
 
+async function onCloseToTrayChange(e: Event) {
+  await saveCloseToTray((e.target as HTMLInputElement).checked)
+}
+
 async function onAutoLaunchChange(e: Event) {
   await saveAutoLaunch((e.target as HTMLInputElement).checked)
 }
@@ -107,45 +90,74 @@ async function onAutoLaunchChange(e: Event) {
 
     <section class="field">
       <label>World of Warcraft folder</label>
-      <div class="row">
-        <input class="path" type="text" readonly :value="store.settings.gamePath ?? 'Not set'" />
-        <button class="btn" @click="browseGameFolder">Browse...</button>
-      </div>
-      <p class="hint">Addons install into <code>Interface/AddOns</code> under this folder.</p>
-    </section>
+      <p class="hint">Location to your WoW game folder — the one containing <code>Wow.exe</code>.</p>
 
-    <section class="field">
-      <label>Custom Launch Command (optional)</label>
-      <div class="row">
-        <input
-          class="path"
-          type="text"
-          v-model="launchCmdDraft"
-          placeholder='e.g. lutris lutris:rungame/world-of-warcraft'
-        />
-        <button class="btn" @click="saveLaunchCmd">{{ launchCmdSaved ? 'Saved' : 'Save' }}</button>
-      </div>
-      <p class="hint">
-        Leave empty to auto-detect and launch <code>Wow.exe</code> directly (via Wine on Linux/macOS).
-        If you play through Lutris, click "Detect Lutris games" below to pick yours instead of typing
-        a command by hand. Bottles/CrossOver/custom Wine prefixes still need to be entered manually
-        &mdash; <code>{game_path}</code> is replaced with the folder above.
-      </p>
-
-      <div class="row lutris-row">
-        <button class="btn" :disabled="lutrisLoading" @click="detectLutrisGames">
-          {{ lutrisLoading ? 'Looking for Lutris…' : 'Detect Lutris games' }}
+      <div class="platform-tabs">
+        <button
+          class="platform-tab"
+          :class="{ active: platformTab === 'windows' }"
+          @click="platformTab = 'windows'"
+        >
+          Windows
+        </button>
+        <button
+          class="platform-tab"
+          :class="{ active: platformTab === 'linux' }"
+          @click="platformTab = 'linux'"
+        >
+          Linux
         </button>
       </div>
-      <p v-if="lutrisError" class="hint error">{{ lutrisError }}</p>
-      <ul v-if="lutrisGames.length" class="lutris-list">
-        <li v-for="game in lutrisGames" :key="game.id">
-          <button class="lutris-game" @click="pickLutrisGame(game)">
-            {{ game.name }}
-            <span class="lutris-runner">{{ game.runner }}</span>
-          </button>
-        </li>
-      </ul>
+
+      <div class="platform-panel">
+        <div class="row">
+          <input class="path" type="text" readonly :value="currentTabGamePath ?? 'Not set'" />
+          <button class="btn" @click="browseGameFolder">Browse...</button>
+        </div>
+        <p v-if="platformTab === 'windows'" class="hint">
+          Usually <code>C:\Program Files (x86)\World of Warcraft</code>.
+        </p>
+        <p v-else class="hint">
+          The folder inside your Wine prefix/Lutris install, e.g.
+          <code>~/Games/world-of-warcraft/drive_c/Program Files (x86)/World of Warcraft</code>.
+        </p>
+        <p class="hint">Addons install into <code>Interface/AddOns</code> under this folder.</p>
+
+        <template v-if="platformTab === 'linux'">
+          <div class="panel-divider"></div>
+          <label class="panel-sublabel">Custom Launch Command (optional)</label>
+          <div class="row">
+            <input
+              class="path"
+              type="text"
+              v-model="launchCmdDraft"
+              placeholder='e.g. lutris lutris:rungame/world-of-warcraft'
+            />
+            <button class="btn" @click="saveLaunchCmd">{{ launchCmdSaved ? 'Saved' : 'Save' }}</button>
+          </div>
+          <p class="hint">
+            Leave empty to auto-detect and launch <code>Wow.exe</code> directly (via Wine). If you
+            play through Lutris, click "Detect Lutris games" below to pick yours instead of typing a
+            command by hand. Bottles/CrossOver/custom Wine prefixes still need to be entered manually
+            &mdash; <code>{game_path}</code> is replaced with the folder above.
+          </p>
+
+          <div class="row lutris-row">
+            <button class="btn" :disabled="lutrisLoading" @click="detectLutrisGames">
+              {{ lutrisLoading ? 'Looking for Lutris…' : 'Detect Lutris games' }}
+            </button>
+          </div>
+          <p v-if="lutrisError" class="hint error">{{ lutrisError }}</p>
+          <ul v-if="lutrisGames.length" class="lutris-list">
+            <li v-for="game in lutrisGames" :key="game.id">
+              <button class="lutris-game" @click="pickLutrisGame(game)">
+                {{ game.name }}
+                <span class="lutris-runner">{{ game.runner }}</span>
+              </button>
+            </li>
+          </ul>
+        </template>
+      </div>
     </section>
 
     <section class="field">
@@ -161,34 +173,19 @@ async function onAutoLaunchChange(e: Event) {
       <label class="checkbox-row">
         <input
           type="checkbox"
+          :checked="store.settings.closeToTray"
+          @change="onCloseToTrayChange"
+        />
+        Hide to the system tray when closing the launcher window
+      </label>
+      <label class="checkbox-row">
+        <input
+          type="checkbox"
           :checked="store.settings.autoLaunch"
           @change="onAutoLaunchChange"
         />
         Automatically sync and launch when the launcher opens
       </label>
-    </section>
-
-    <section class="field">
-      <label>Guild server URL</label>
-      <div class="row">
-        <input class="path" type="text" v-model="apiUrlDraft" placeholder="https://launcher-api.example.com/api" />
-        <button class="btn" @click="saveApiUrl">{{ apiUrlSaved ? 'Saved' : 'Save' }}</button>
-      </div>
-      <p class="hint">Where the launcher fetches the addon manifest and guild news.</p>
-    </section>
-
-    <section class="field">
-      <label>Guild API Key</label>
-      <div class="row">
-        <input
-          class="path"
-          type="password"
-          v-model="apiKeyDraft"
-          placeholder="Ask an officer for the guild launcher key"
-        />
-        <button class="btn" @click="saveApiKeyValue">{{ apiKeySaved ? 'Saved' : 'Save' }}</button>
-      </div>
-      <p class="hint">Required to fetch the manifest and launcher updates. Sent as the X-API-KEY header.</p>
     </section>
 
     <section class="field">
@@ -281,6 +278,63 @@ label {
 
 .hint.error {
   color: var(--danger);
+}
+
+.platform-tabs {
+  display: flex;
+  gap: 2px;
+  margin-top: 10px;
+}
+
+.platform-tab {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  color: var(--text-dim);
+  border-radius: 6px 6px 0 0;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  position: relative;
+  top: 1px;
+}
+
+.platform-tab:hover {
+  color: var(--text);
+}
+
+.platform-tab.active {
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-panel));
+  border-color: var(--accent-dim);
+  color: var(--accent-strong);
+}
+
+/* Sits flush under the tabs, sharing a subtle accent tint with whichever
+ * tab is active so the two visually read as one connected piece. */
+.platform-panel {
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  border: 1px solid var(--accent-dim);
+  border-radius: 0 8px 8px 8px;
+  padding: 14px;
+}
+
+.platform-panel .row:first-child {
+  margin-top: 0;
+}
+
+.panel-divider {
+  border-top: 1px solid var(--accent-dim);
+  margin: 14px 0;
+}
+
+.panel-sublabel {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 8px;
 }
 
 .lutris-row {

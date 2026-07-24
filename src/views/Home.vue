@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { store, syncGuildDataToWeb } from '../store';
+import { PhArrowSquareOut } from '@phosphor-icons/vue';
+import { currentGamePath, store } from '../store';
+import { openCharacterPage } from '../api';
 import heroImg from '../assets/hero.png';
 import type { GuildSyncData } from '../types';
 
@@ -60,13 +62,26 @@ const sortedCharacters = computed<GuildSyncData[]>(() => {
     return rankA - rankB
   })
 })
+
+const syncStatusLabel = computed(() => {
+  if (store.guildSyncing) return 'Syncing…'
+  if (store.guildLastSyncedAt) {
+    const time = new Date(store.guildLastSyncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    return `Synced at ${time}`
+  }
+  return null
+})
+
+function viewCharacterOnWeb(character: GuildSyncData) {
+  void openCharacterPage(store.apiBaseUrl, character.name)
+}
 </script>
 
 <template>
   <div class="home">
     <div class="banner" :style="{ backgroundImage: `url(${heroImg})` }">
       <div class="banner-overlay">
-        <h1>Welcome back{{ store.settings.gamePath ? '' : ', adventurer' }}</h1>
+        <h1>Welcome back{{ currentGamePath() ? '' : ', adventurer' }}</h1>
         <p>Keep your addons in sync and jump straight into raid.</p>
       </div>
     </div>
@@ -74,14 +89,7 @@ const sortedCharacters = computed<GuildSyncData[]>(() => {
     <section class="character">
       <div class="character-header">
         <h2>My Characters</h2>
-        <button
-          v-if="store.guildSyncData.length"
-          class="btn accent"
-          :disabled="!store.settings.discordToken || store.guildSyncing"
-          @click="syncGuildDataToWeb"
-        >
-          {{ store.guildSyncing ? 'Syncing…' : 'Sync to website' }}
-        </button>
+        <span v-if="syncStatusLabel" class="sync-status">{{ syncStatusLabel }}</span>
       </div>
 
       <div v-if="!store.guildSyncData.length" class="empty">
@@ -98,6 +106,13 @@ const sortedCharacters = computed<GuildSyncData[]>(() => {
               {{ character.race }} {{ character.class }} · Level {{ character.level }}
               <template v-if="character.guildRank"> · {{ character.guildRank }}</template>
             </span>
+            <button
+              class="character-web-link"
+              title="View on website"
+              @click="viewCharacterOnWeb(character)"
+            >
+              <PhArrowSquareOut :size="18" weight="duotone" />
+            </button>
           </li>
         </ul>
         <p v-if="!store.settings.discordToken" class="hint">
@@ -223,34 +238,25 @@ const sortedCharacters = computed<GuildSyncData[]>(() => {
   color: var(--text-dim);
 }
 
-.btn {
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  color: var(--text);
-  border-radius: var(--radius);
-  padding: 9px 16px;
-  font-size: 13px;
-  font-weight: 500;
+.character-web-link {
+  margin-left: auto;
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  color: var(--text-dim);
+  padding: 4px;
+  border-radius: 6px;
 }
 
-.btn:hover {
-  border-color: var(--accent-dim);
+.character-web-link:hover {
+  color: var(--accent-strong);
+  background: var(--bg-elevated);
 }
 
-.btn:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
-
-.btn.accent {
-  background: var(--accent);
-  color: #062028;
-  border-color: var(--accent);
-}
-
-.btn.accent:hover:not(:disabled) {
-  border-color: var(--accent-strong);
+.sync-status {
+  font-size: 11px;
+  color: var(--text-dim);
+  flex-shrink: 0;
 }
 
 .hint {

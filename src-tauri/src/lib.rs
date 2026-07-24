@@ -1,4 +1,5 @@
 mod commands;
+mod config;
 mod guild_sync;
 mod settings;
 mod sync;
@@ -23,6 +24,13 @@ fn show_main_window(app: &tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+  // Configured once here (not passed from the frontend on each check) so
+  // the API key never needs to reach JS at all.
+  let updater = tauri_plugin_updater::Builder::new()
+    .header("X-API-KEY", config::API_KEY)
+    .expect("invalid API key header value")
+    .build();
+
   tauri::Builder::default()
     // Must be registered first: on Windows/Linux a deep link relaunches the
     // app as a brand new process, so without this every sot-launcher://
@@ -72,15 +80,26 @@ pub fn run() {
         });
       });
 
+      // Label mirrors the frontend's update-available state (see
+      // set_tray_primary_label) — click just emits an event and lets the
+      // frontend decide whether that means installUpdate() or playNow(),
+      // reusing its existing sync-then-launch/update logic rather than
+      // duplicating it here.
+      let play_i = MenuItem::with_id(app, "primary", "Play", true, None::<&str>)?;
       let show_i = MenuItem::with_id(app, "show", "Open", true, None::<&str>)?;
       let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-      let tray_menu = Menu::with_items(app, &[&show_i, &quit_i])?;
+      let tray_menu = Menu::with_items(app, &[&play_i, &show_i, &quit_i])?;
+
+      app.state::<AppState>().tray_primary_item.lock().unwrap().replace(play_i);
 
       TrayIconBuilder::new()
         .icon(app.default_window_icon().unwrap().clone())
         .menu(&tray_menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
+          "primary" => {
+            let _ = app.emit("tray-primary-clicked", ());
+          }
           "show" => show_main_window(app),
           "quit" => app.exit(0),
           _ => {}
@@ -96,16 +115,31 @@ pub fn run() {
     })
     .plugin(tauri_plugin_dialog::init())
     .plugin(tauri_plugin_shell::init())
-    .plugin(tauri_plugin_updater::Builder::new().build())
+    .plugin(updater)
     .plugin(tauri_plugin_process::init())
     .plugin(tauri_plugin_deep_link::init())
+    // Reads the setting fresh on every close (not cached), same as any
+    // other command, so a change takes effect without a restart.
+    .on_window_event(|window, event| {
+      if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+        let close_to_tray = settings::load_settings(window.app_handle())
+          .map(|s| s.close_to_tray)
+          .unwrap_or(true);
+        if close_to_tray {
+          api.prevent_close();
+          let _ = window.hide();
+        }
+      }
+    })
     .invoke_handler(tauri::generate_handler![
       commands::get_settings,
-      commands::set_game_path,
-      commands::set_api_base_url,
-      commands::set_api_key,
+      commands::get_api_base_url,
+      commands::set_tray_primary_label,
+      commands::set_game_path_windows,
+      commands::set_game_path_linux,
       commands::set_launch_command,
       commands::set_hide_on_launch,
+      commands::set_close_to_tray,
       commands::set_auto_launch,
       commands::pick_game_folder,
       commands::fetch_manifest,

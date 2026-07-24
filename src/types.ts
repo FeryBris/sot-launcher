@@ -30,12 +30,12 @@ export interface Manifest {
 }
 
 export interface Settings {
-  gamePath: string | null
+  gamePathWindows: string | null
+  gamePathLinux: string | null
   launchCommand: string | null
   hideOnLaunch: boolean
+  closeToTray: boolean
   autoLaunch: boolean
-  apiBaseUrl: string
-  apiKey: string | null
   addonEnabled: Record<string, boolean>
   discordToken: string | null
   discordUsername: string | null
@@ -91,6 +91,24 @@ export interface LutrisGame {
   name: string
   runner: string
   launchCommand: string
+}
+
+/** name/level/quality/itemType/itemSubType/equipLocType/equipLocName/icon
+ *  come straight from the addon's own GetItemInfo() read of the game's
+ *  item cache — absent when the client hasn't cached that item's tooltip
+ *  data yet. */
+export interface GuildSyncEquipmentItem {
+  itemId: number
+  enchantId: number
+  gemIds: number[]
+  name: string | null
+  level: number | null
+  quality: string | null
+  itemType: string | null
+  itemSubType: string | null
+  equipLocType: string | null
+  equipLocName: string | null
+  icon: string | null
 }
 
 export interface GuildSyncTalents {
@@ -160,7 +178,7 @@ export interface GuildSyncData {
   guildRankIndex: number | null
   level: number
   gold: number
-  equipment: number[]
+  equipment: GuildSyncEquipmentItem[]
   talents: GuildSyncTalents
   honorableKills: number
   achievementPoints: number

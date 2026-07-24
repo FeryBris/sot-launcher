@@ -15,16 +15,18 @@ export function getSettings(): Promise<Settings> {
   return invoke('get_settings')
 }
 
-export function setGamePath(path: string): Promise<Settings> {
-  return invoke('set_game_path', { path })
+export function setGamePathWindows(path: string): Promise<Settings> {
+  return invoke('set_game_path_windows', { path })
 }
 
-export function setApiBaseUrl(url: string): Promise<Settings> {
-  return invoke('set_api_base_url', { url })
+export function setGamePathLinux(path: string): Promise<Settings> {
+  return invoke('set_game_path_linux', { path })
 }
 
-export function setApiKey(key: string): Promise<Settings> {
-  return invoke('set_api_key', { key })
+/** The guild site's base URL — safe to expose (not a secret), baked in at
+ *  build time. Used only to build browser-open links. */
+export function getApiBaseUrl(): Promise<string> {
+  return invoke('get_api_base_url')
 }
 
 export function setLaunchCommand(command: string): Promise<Settings> {
@@ -35,6 +37,10 @@ export function setHideOnLaunch(enabled: boolean): Promise<Settings> {
   return invoke('set_hide_on_launch', { enabled })
 }
 
+export function setCloseToTray(enabled: boolean): Promise<Settings> {
+  return invoke('set_close_to_tray', { enabled })
+}
+
 export function setAutoLaunch(enabled: boolean): Promise<Settings> {
   return invoke('set_auto_launch', { enabled })
 }
@@ -43,8 +49,8 @@ export function pickGameFolder(): Promise<string | null> {
   return invoke('pick_game_folder')
 }
 
-export function fetchManifest(apiBaseUrl: string): Promise<Manifest> {
-  return invoke('fetch_manifest', { apiBaseUrl })
+export function fetchManifest(): Promise<Manifest> {
+  return invoke('fetch_manifest')
 }
 
 export function getInstalledState(manifest: Manifest): Promise<InstalledState> {
@@ -91,6 +97,14 @@ export function startDiscordLogin(apiBaseUrl: string): Promise<void> {
   return open(site.toString())
 }
 
+/** Opens a character's public page on the guild site in the system browser. */
+export function openCharacterPage(apiBaseUrl: string, name: string): Promise<void> {
+  const site = new URL(apiBaseUrl)
+  site.pathname = `/character/${encodeURIComponent(name)}`
+  site.search = ''
+  return open(site.toString())
+}
+
 export function pairWithCode(code: string): Promise<Settings> {
   return invoke('pair_with_code', { code })
 }
@@ -105,4 +119,16 @@ export function onDiscordPaired(handler: (s: Settings) => void): Promise<Unliste
 
 export function onDiscordPairError(handler: (message: string) => void): Promise<UnlistenFn> {
   return listen<string>('discord-pair-error', (event) => handler(event.payload))
+}
+
+/** Relabels the tray menu's first item ("Play" <-> "Update"). */
+export function setTrayPrimaryLabel(label: string): Promise<void> {
+  return invoke('set_tray_primary_label', { label })
+}
+
+/** Fired when the tray menu's first item is clicked — the frontend decides
+ *  whether that means installUpdate() or playNow() based on its own
+ *  update-available state. */
+export function onTrayPrimaryClicked(handler: () => void): Promise<UnlistenFn> {
+  return listen('tray-primary-clicked', () => handler())
 }

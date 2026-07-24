@@ -53,6 +53,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          # Baked into the binary at compile time via env!() in
+          # src-tauri/src/config.rs (see src-tauri/.env.example) — SOT_API_KEY
+          # is a secret, SOT_API_BASE_URL isn't, hence the split between
+          # secrets./vars. here.
+          SOT_API_KEY: ${{ secrets.SOT_API_KEY }}
+          SOT_API_BASE_URL: ${{ vars.SOT_API_BASE_URL }}
         with:
           tagName: app-v__VERSION__
           releaseName: 'SoT Launcher v__VERSION__'

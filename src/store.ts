@@ -1,5 +1,6 @@
 import { reactive } from 'vue'
 import * as api from './api'
+import { isWindows } from './platform'
 import type { AddonEntry, GuildSyncData, InstalledState, Manifest, Settings, SyncProgress } from './types'
 
 export interface ConfirmRequest {
@@ -11,6 +12,10 @@ export interface ConfirmRequest {
 
 interface Store {
   settings: Settings
+  /** The guild site's base URL, baked in at build time (see src-tauri/.env)
+   *  and fetched once via get_api_base_url — not part of Settings since
+   *  it's not player-editable. */
+  apiBaseUrl: string
   manifest: Manifest | null
   installed: InstalledState | null
   /** Explicit user overrides only; absence falls back to the category default. */
@@ -25,21 +30,23 @@ interface Store {
   guildSyncData: GuildSyncData[]
   guildSyncing: boolean
   guildSyncError: string
+  guildLastSyncedAt: number | null
 }
 
 export const store = reactive<Store>({
   settings: {
-    gamePath: null,
+    gamePathWindows: null,
+    gamePathLinux: null,
     launchCommand: null,
-    hideOnLaunch: false,
+    hideOnLaunch: true,
+    closeToTray: true,
     autoLaunch: false,
-    apiBaseUrl: '',
-    apiKey: null,
     addonEnabled: {},
     discordToken: null,
     discordUsername: null,
     discordAvatar: null,
   },
+  apiBaseUrl: '',
   manifest: null,
   installed: null,
   addonEnabled: {},
@@ -53,6 +60,7 @@ export const store = reactive<Store>({
   guildSyncData: [],
   guildSyncing: false,
   guildSyncError: '',
+  guildLastSyncedAt: null,
 })
 
 /** Active confirm-dialog request, rendered by <ConfirmDialog> mounted once at the app root. */
@@ -90,13 +98,55 @@ let guildSyncPollHandle: ReturnType<typeof setInterval> | null = null
 function startGuildSyncPolling() {
   if (guildSyncPollHandle) return
   guildSyncPollHandle = setInterval(() => {
-    void refreshGuildSyncData()
+    void refreshGuildSyncData().then(() => maybeAutoSyncGuildData())
   }, GUILD_SYNC_POLL_INTERVAL_MS)
+}
+
+const AUTO_SYNC_DEBOUNCE_MS = 60_000
+let lastAutoSyncSnapshot = ''
+let lastAutoSyncAt = 0
+
+/** name:updatedAt pairs, sorted so member order never causes a spurious
+ *  "changed" result — only real per-character data changes should. */
+function guildSyncSnapshot(data: typeof store.guildSyncData): string {
+  return data
+    .map((c) => `${c.name}:${c.updatedAt}`)
+    .sort()
+    .join('|')
+}
+
+/** Auto-syncs to the website when the local data actually changed since
+ *  the last successful sync, debounced so a burst of gold/gear changes
+ *  (e.g. vendoring during a raid) doesn't fire a request every poll tick.
+ *  A failed attempt doesn't update the snapshot, so it's retried on the
+ *  next poll once the debounce window passes. */
+async function maybeAutoSyncGuildData() {
+  if (!store.settings.discordToken) return
+  if (store.guildSyncing) return
+
+  const snapshot = guildSyncSnapshot(store.guildSyncData)
+  if (snapshot === lastAutoSyncSnapshot) return
+  if (Date.now() - lastAutoSyncAt < AUTO_SYNC_DEBOUNCE_MS) return
+
+  lastAutoSyncAt = Date.now()
+  await syncGuildDataToWeb()
+  if (!store.guildSyncError) {
+    lastAutoSyncSnapshot = snapshot
+    store.guildLastSyncedAt = Date.now()
+  }
+}
+
+/** The game path for whichever OS this is actually running on — same
+ *  Windows/Linux split as the Rust side (Settings.game_path()), just
+ *  determined client-side since the webview already knows its own OS. */
+export function currentGamePath(): string | null {
+  return isWindows() ? store.settings.gamePathWindows : store.settings.gamePathLinux
 }
 
 export async function init() {
   if (store.loaded) return
   store.settings = await api.getSettings()
+  store.apiBaseUrl = await api.getApiBaseUrl()
   store.addonEnabled = { ...store.settings.addonEnabled }
   store.loaded = true
 
@@ -110,22 +160,21 @@ export async function init() {
   discordPairedUnlisten = await api.onDiscordPaired((s) => {
     store.settings = s
     store.discordError = ''
+    void maybeAutoSyncGuildData()
   })
   discordPairErrorUnlisten = await api.onDiscordPairError((message) => {
     store.discordError = message
   })
 
-  if (store.settings.apiBaseUrl) {
-    await refreshManifest()
-  }
-
+  await refreshManifest()
   await refreshGuildSyncData()
+  void maybeAutoSyncGuildData()
   startGuildSyncPolling()
 }
 
 /** Re-reads the SoTGuildSync addon's SavedVariables snapshot, if any. */
 export async function refreshGuildSyncData() {
-  if (!store.settings.gamePath) {
+  if (!currentGamePath()) {
     store.guildSyncData = []
     return
   }
@@ -136,7 +185,7 @@ export async function refreshGuildSyncData() {
   }
 }
 
-export async function syncGuildDataToWeb() {
+async function syncGuildDataToWeb() {
   store.guildSyncing = true
   store.guildSyncError = ''
   try {
@@ -153,7 +202,7 @@ export async function syncGuildDataToWeb() {
 export async function signInWithDiscord() {
   store.discordError = ''
   try {
-    await api.startDiscordLogin(store.settings.apiBaseUrl)
+    await api.startDiscordLogin(store.apiBaseUrl)
   } catch (e) {
     store.discordError = String(e)
   }
@@ -171,7 +220,7 @@ export async function refreshManifest() {
   store.loadingManifest = true
   store.manifestError = ''
   try {
-    store.manifest = await api.fetchManifest(store.settings.apiBaseUrl)
+    store.manifest = await api.fetchManifest()
     await refreshInstalledState()
   } catch (e) {
     store.manifestError = String(e)
@@ -182,7 +231,7 @@ export async function refreshManifest() {
 
 /** Re-reads on-disk state (addon markers + WTF file hashes) against the current manifest. */
 export async function refreshInstalledState() {
-  if (!store.manifest || !store.settings.gamePath) {
+  if (!store.manifest || !currentGamePath()) {
     store.installed = null
     return
   }
@@ -193,8 +242,8 @@ export async function refreshInstalledState() {
   }
 }
 
-export async function saveGamePath(path: string) {
-  store.settings = await api.setGamePath(path)
+export async function saveGamePath(path: string, platform: 'windows' | 'linux') {
+  store.settings = platform === 'windows' ? await api.setGamePathWindows(path) : await api.setGamePathLinux(path)
   await refreshInstalledState()
   await refreshGuildSyncData()
 }
@@ -207,18 +256,12 @@ export async function saveHideOnLaunch(enabled: boolean) {
   store.settings = await api.setHideOnLaunch(enabled)
 }
 
+export async function saveCloseToTray(enabled: boolean) {
+  store.settings = await api.setCloseToTray(enabled)
+}
+
 export async function saveAutoLaunch(enabled: boolean) {
   store.settings = await api.setAutoLaunch(enabled)
-}
-
-export async function saveApiBaseUrl(url: string) {
-  store.settings = await api.setApiBaseUrl(url)
-  await refreshManifest()
-}
-
-export async function saveApiKey(key: string) {
-  store.settings = await api.setApiKey(key)
-  await refreshManifest()
 }
 
 /** Whether an addon should be active, applying category defaults when the user hasn't overridden it. */
@@ -329,7 +372,7 @@ export function pendingCount(): number {
 }
 
 export async function playNow() {
-  if (!store.settings.gamePath || store.syncing) return
+  if (!currentGamePath() || store.syncing) return
   if (pendingCount() > 0) {
     await syncNow()
     if (store.syncError) return

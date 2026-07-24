@@ -46,23 +46,31 @@ pub struct Manifest {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
+    /// Stored separately per OS so the same settings.json (e.g. synced
+    /// across machines) doesn't show one platform's path under the
+    /// other's label — see `Settings::game_path()` for the one that
+    /// actually matters at runtime.
     #[serde(default)]
-    pub game_path: Option<String>,
+    pub game_path_windows: Option<String>,
+    #[serde(default)]
+    pub game_path_linux: Option<String>,
     /// Overrides how the game is launched (e.g. a Lutris/Bottles/custom Wine
     /// invocation). "{game_path}" is substituted with the configured game folder.
     #[serde(default)]
     pub launch_command: Option<String>,
     /// If set, the main window is hidden to the system tray (rather than
     /// left open) once `launch_game` successfully starts the game.
-    #[serde(default)]
+    /// Defaults to on (see `default_true` and `Settings::default()`'s
+    /// override in settings.rs for brand-new installs).
+    #[serde(default = "default_true")]
     pub hide_on_launch: bool,
+    /// If set, the window's own close (X) button hides it to the tray
+    /// instead of quitting the app — see the CloseRequested handler in
+    /// lib.rs. Same default-true treatment as hide_on_launch.
+    #[serde(default = "default_true")]
+    pub close_to_tray: bool,
     #[serde(default)]
     pub auto_launch: bool,
-    #[serde(default = "default_api_base_url")]
-    pub api_base_url: String,
-    /// Sent as the X-API-KEY header on manifest/update requests.
-    #[serde(default)]
-    pub api_key: Option<String>,
     /// addon name -> whether the user wants it active. Only stores explicit
     /// overrides; anything absent falls back to its category default
     /// (mandatory: always on, recommended: on, optional: off). This is a
@@ -71,7 +79,8 @@ pub struct Settings {
     #[serde(default)]
     pub addon_enabled: std::collections::HashMap<String, bool>,
     /// Personal Bearer token from Discord pairing, sent on requests that
-    /// need per-player identity (distinct from the shared api_key above).
+    /// need per-player identity (distinct from the shared, compile-time
+    /// baked-in API key — see config.rs).
     #[serde(default)]
     pub discord_token: Option<String>,
     #[serde(default)]
@@ -80,8 +89,22 @@ pub struct Settings {
     pub discord_avatar: Option<String>,
 }
 
-fn default_api_base_url() -> String {
-    "https://sot.sk/api/launcher".to_string()
+fn default_true() -> bool {
+    true
+}
+
+impl Settings {
+    /// The game path for whichever OS this build is actually running on.
+    /// The Settings UI can show/edit both platforms' paths (so switching
+    /// tabs isn't confusingly showing the same value under both labels),
+    /// but only one of them is ever real for a given running instance.
+    pub fn game_path(&self) -> Option<String> {
+        if cfg!(target_os = "windows") {
+            self.game_path_windows.clone()
+        } else {
+            self.game_path_linux.clone()
+        }
+    }
 }
 
 /// One entry in `Interface/AddOns/.sotlauncher.json` — the single file that
@@ -176,6 +199,36 @@ pub struct LutrisGame {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct GuildSyncEquipmentItem {
+    pub item_id: i64,
+    #[serde(default)]
+    pub enchant_id: i64,
+    #[serde(default)]
+    pub gem_ids: Vec<i64>,
+    /// The remaining fields come straight from the addon's own
+    /// GetItemInfo() read of this server's item cache — absent (rather
+    /// than a placeholder) when the client hasn't cached that item's
+    /// tooltip data yet.
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub level: Option<i64>,
+    #[serde(default)]
+    pub quality: Option<String>,
+    #[serde(default)]
+    pub item_type: Option<String>,
+    #[serde(default)]
+    pub item_sub_type: Option<String>,
+    #[serde(default)]
+    pub equip_loc_type: Option<String>,
+    #[serde(default)]
+    pub equip_loc_name: Option<String>,
+    #[serde(default)]
+    pub icon: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GuildSyncTalents {
     pub first_tree: Option<String>,
     #[serde(default)]
@@ -253,7 +306,7 @@ pub struct GuildSyncData {
     pub level: i64,
     pub gold: i64,
     #[serde(default)]
-    pub equipment: Vec<i64>,
+    pub equipment: Vec<GuildSyncEquipmentItem>,
     pub talents: GuildSyncTalents,
     pub honorable_kills: i64,
     pub achievement_points: i64,

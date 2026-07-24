@@ -19,7 +19,14 @@ fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
 pub fn load_settings(app: &AppHandle) -> Result<Settings, String> {
     let path = settings_path(app)?;
     if !path.exists() {
-        return Ok(Settings::default());
+        // Settings::default() alone gives these bools' plain false default
+        // — override for brand-new installs; existing settings.json files
+        // keep whatever the player already chose.
+        return Ok(Settings {
+            hide_on_launch: true,
+            close_to_tray: true,
+            ..Settings::default()
+        });
     }
     let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
     serde_json::from_str(&raw).map_err(|e| e.to_string())

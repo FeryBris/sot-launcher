@@ -15,6 +15,10 @@ dist-ssr
 # Tauri updater signing key (NEVER commit the private key)
 .tauri-keys/*.key
 
+# Guild API key/URL baked into the build via src-tauri/build.rs — see
+# src-tauri/.env.example for the template. NEVER commit the real .env.
+.env
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

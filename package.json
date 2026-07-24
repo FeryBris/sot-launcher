@@ -11,6 +11,7 @@
     "tauri:build:signed": "bash scripts/build-signed.sh"
   },
   "dependencies": {
+    "@phosphor-icons/vue": "^2.2.1",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-deep-link": "^2.4.9",
     "@tauri-apps/plugin-dialog": "^2.7.2",
