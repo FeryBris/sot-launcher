@@ -78,8 +78,14 @@ pub fn read_guild_sync_data(game_path: &Path) -> Result<Vec<GuildSyncData>, Stri
     };
 
     let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let json = extract_json_string(&raw, "json")
-        .ok_or_else(|| "could not find guild sync data in SavedVariables file".to_string())?;
+    // The file can exist (SoTGuildSyncDB = SoTGuildSyncDB or {} always
+    // runs on load) without `json` ever having been written yet — e.g.
+    // guild membership was never confirmed true during this session. That's
+    // the same "nothing to report yet" case as the file not existing at
+    // all, not a real parse error.
+    let Some(json) = extract_json_string(&raw, "json") else {
+        return Ok(Vec::new());
+    };
 
     // The addon's own JSON encoder can't tell an empty map from an empty
     // array (Lua has no distinction), so it always writes an empty
