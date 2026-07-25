@@ -228,6 +228,11 @@ export interface MyLootEntry {
   id: number
   item: MyLootItem
   givenAt: FormattedDate | null
+  /** Not collapsed — every loot of this item still gets its own entry —
+   *  but if this item was looted more than once, the total count is
+   *  attached here on its last (oldest) occurrence in the list, null on
+   *  every other occurrence (including single, un-repeated loots). */
+  count: number | null
   response: { id: number | null; label: string | null; name: string | null }
 }
 

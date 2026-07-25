@@ -36,18 +36,23 @@ const RESPONSE_COLOR: Record<string, string> = {
   'Mainspec/Need': '#1eff00',
   'Offspec/Greed': '#ff7c0a',
   'Small Upgrade but not BiS': '#00ccff',
+  // No color-variant token for this one on the website (lootResponse
+  // .abbreviation is null for ML/Roll) — a neutral gray, since it's a
+  // less deliberate pick than the other whitelisted responses.
+  'ML/Roll': '#9d9d9d',
 };
 function responseColor(name: string | null): string | undefined {
   return (name && RESPONSE_COLOR[name]) || undefined;
 }
 
 // Short labels for the per-instance totals row, in the order the user
-// wants them displayed (BIS, MS, SM, OS).
+// wants them displayed (BIS, MS, SM, OS, Roll).
 const RESPONSE_ORDER: { key: string; label: string }[] = [
   { key: 'BIS/Need', label: 'BIS' },
   { key: 'Mainspec/Need', label: 'MS' },
   { key: 'Small Upgrade but not BiS', label: 'SM' },
   { key: 'Offspec/Greed', label: 'OS' },
+  { key: 'ML/Roll', label: 'Roll' },
 ];
 
 // Same abbreviation -> image convention as the website's own
@@ -212,6 +217,14 @@ const responseTotals = computed(() => {
                     }}</span>
                   </template>
                 </span>
+              </div>
+              <div
+                v-if="loot.count"
+                class="loot-count"
+                title="Total times looted in this instance"
+              >
+                <span class="loot-count-label">Total</span>
+                <span class="loot-count-value">×{{ loot.count }}</span>
               </div>
               <div v-if="loot.givenAt?.day" class="loot-date" :title="loot.givenAt.stringDate">
                 <span class="loot-date-day">{{ loot.givenAt.day }}.{{ loot.givenAt.month }}.</span>
@@ -477,6 +490,29 @@ const responseTotals = computed(() => {
 
 .loot-ilvl {
   color: var(--text-dim);
+}
+
+.loot-count {
+  flex-shrink: 0;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 1.3;
+}
+
+.loot-count-label {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.loot-count-value {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent-strong);
 }
 
 .loot-date {
