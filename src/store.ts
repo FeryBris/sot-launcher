@@ -440,7 +440,15 @@ export async function syncNow() {
   store.syncError = ''
   store.syncProgress = null
   try {
-    await api.runSync(store.manifest, store.addonEnabled)
+    const result = await api.runSync(store.manifest, store.addonEnabled)
+    // run_sync only rejects on a whole-command failure (e.g. can't create
+    // a directory) — a single addon/WTF file failing (bad checksum, a
+    // dead download URL) is reported per-item in these `failed` arrays
+    // instead, so it has to be checked explicitly or it's silently lost.
+    const failed = [...result.addons.failed, ...result.wtfFiles.failed]
+    if (failed.length > 0) {
+      store.syncError = failed.map(([name, reason]) => `${name}: ${reason}`).join('; ')
+    }
     await refreshInstalledState()
   } catch (e) {
     store.syncError = String(e)
