@@ -27,7 +27,16 @@ pub struct AppState {
 impl Default for AppState {
     fn default() -> Self {
         Self {
-            http: reqwest::Client::new(),
+            // No timeout (reqwest::Client::new()'s default) means a
+            // stalled connection hangs the calling command forever instead
+            // of erroring — observed on Windows, e.g. a Discord pairing
+            // exchange that just never completes and never surfaces an
+            // error either. 30s is generous for the small JSON payloads
+            // every command using this client sends.
+            http: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_default(),
             tray_primary_item: std::sync::Mutex::new(None),
             guild_watcher: std::sync::Mutex::new(None),
         }

@@ -133,6 +133,9 @@ onMounted(async () => {
           <span class="discord-name">{{ store.settings.discordUsername }}</span>
         </div>
         <button v-else class="discord-signin-btn" @click="signInWithDiscord">Sign in</button>
+        <div v-if="store.discordError" class="discord-error" :title="store.discordError">
+          Sign-in failed — try again
+        </div>
       </div>
     </aside>
 
@@ -273,6 +276,17 @@ onMounted(async () => {
 }
 
 .manifest-error {
+  background: var(--bg-panel);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  padding: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--danger);
+  text-align: center;
+}
+
+.discord-error {
   background: var(--bg-panel);
   border: 1px solid var(--danger);
   border-radius: var(--radius);

@@ -225,8 +225,14 @@ export async function refreshGuildSyncData() {
   }
   try {
     store.guildSyncData = await api.getGuildSyncData()
-  } catch {
-    store.guildSyncData = []
+  } catch (e) {
+    // A parse failure here almost always means the file watcher fired
+    // while WoW was still mid-write to SoTGuildSync.lua (e.g. the big
+    // flush on logout) and caught a truncated file — not a real "no data"
+    // state. Keep whatever was last successfully read rather than
+    // flashing the UI back to empty; the next file-changed event (or app
+    // restart) will pick up the completed write.
+    console.warn('Failed to read guild sync data, keeping last known data', e)
   }
 }
 

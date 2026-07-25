@@ -59,8 +59,20 @@ fn safe_join(base: &Path, rel: &str) -> Result<PathBuf, String> {
     Ok(result)
 }
 
+// No timeout at all (reqwest::get()'s implicit default) means a connection
+// that stalls instead of failing outright — observed on Windows, where a
+// download can hang indefinitely with the sync stuck on "downloading" and
+// no error ever surfacing — hangs forever instead of erroring, leaving
+// the UI stuck showing "downloading" with no way to know anything's
+// wrong. A generous but finite timeout turns that into a clear error.
+const DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
 async fn download_to_file(url: &str, dest: &Path) -> Result<(), String> {
-    let resp = reqwest::get(url).await.map_err(|e| e.to_string())?;
+    let client = reqwest::Client::builder()
+        .timeout(DOWNLOAD_TIMEOUT)
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client.get(url).send().await.map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
         return Err(format!("HTTP {} while downloading {}", resp.status(), url));
     }

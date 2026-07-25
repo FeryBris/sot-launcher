@@ -1,7 +1,7 @@
 use notify::{RecursiveMode, Watcher};
 use std::path::Path;
 use std::sync::mpsc::channel;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::commands::AppState;
@@ -51,29 +51,45 @@ pub fn watch_guild_data(app: &AppHandle, game_path: &Path) {
     let app = app.clone();
     std::thread::spawn(move || {
         // WoW (or the OS) can fire several write events for one logical
-        // save (e.g. a write-then-rename), so collapse a burst into a
-        // single emit rather than spamming the frontend.
-        let mut last_emit = Instant::now() - Duration::from_secs(10);
+        // save (e.g. a write-then-rename, or several partial flushes
+        // during the bigger write a full logout does) — this needs to be
+        // a trailing debounce (wait for 500ms of silence, then emit once)
+        // rather than a leading throttle (emit on the first event, then
+        // ignore the rest for 500ms). A throttle would fire on the FIRST
+        // event in a burst, which can catch the file mid-write, and then
+        // silently drop the later event for the actually-completed write
+        // — leaving the frontend stuck having read a truncated file with
+        // no further notification to re-read it.
+        let mut pending = false;
 
-        for res in rx {
-            let Ok(event) = res else { continue };
-            if !matches!(event.kind, notify::EventKind::Modify(_) | notify::EventKind::Create(_)) {
-                continue;
+        loop {
+            match rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(Ok(event)) => {
+                    if !matches!(
+                        event.kind,
+                        notify::EventKind::Modify(_) | notify::EventKind::Create(_)
+                    ) {
+                        continue;
+                    }
+                    let relevant = event.paths.iter().any(|p| {
+                        matches!(
+                            p.file_name().and_then(|n| n.to_str()),
+                            Some("SoTGuildSync.lua") | Some("GuildExport.lua")
+                        )
+                    });
+                    if relevant {
+                        pending = true;
+                    }
+                }
+                Ok(Err(_)) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    if pending {
+                        pending = false;
+                        let _ = app.emit("guild-data-changed", ());
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
             }
-            let relevant = event.paths.iter().any(|p| {
-                matches!(
-                    p.file_name().and_then(|n| n.to_str()),
-                    Some("SoTGuildSync.lua") | Some("GuildExport.lua")
-                )
-            });
-            if !relevant {
-                continue;
-            }
-            if last_emit.elapsed() < Duration::from_millis(500) {
-                continue;
-            }
-            last_emit = Instant::now();
-            let _ = app.emit("guild-data-changed", ());
         }
     });
 }
