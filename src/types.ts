@@ -244,11 +244,10 @@ export interface MyLootItem {
   name: string
   level: number | null
   /** Media relation is snake_case on the website's side (unlike the rest
-   *  of this payload) — `full_path` is the actual icon image URL,
-   *  `original_name` (e.g. "inv_sword_39.jpg") is the Wowhead/Blizzard
-   *  icon filename, used to build an rpglogs.com fallback icon URL when
-   *  the hosted image is missing or fails to load. */
-  media: { full_path?: string; original_name?: string } | null
+   *  of this payload) — `full_path` is the actual icon image URL. No
+   *  third-party fallback when it's missing: a local blank placeholder
+   *  is used instead (see MyLoot.vue's itemIconSrc). */
+  media: { full_path?: string } | null
   quality: string | null
   class: string | null
   subclass: string | null

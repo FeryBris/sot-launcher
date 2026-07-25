@@ -5,6 +5,7 @@ import { store } from '../store';
 import type { MyLootInstance, MyLootItem } from '../types';
 import LoadingSpinner from './LoadingSpinner.vue';
 
+import blankIcon from '../assets/blank.webp';
 import naxxImg from '../assets/instances/naxxramas.webp';
 import obsidianSanctumImg from '../assets/instances/the_obsidian_sanctum.webp';
 import eyeOfEternityImg from '../assets/instances/the_eye_of_eternity.webp';
@@ -74,21 +75,15 @@ function instanceImage(abbreviation: string | null): string | undefined {
 }
 
 // Same fallback as the website's ItemIconSimple.vue — the hosted media
-// image is preferred, but falls back to rpglogs.com's Wowhead icon
-// mirror (keyed by the same icon filename Blizzard/Wowhead use) when
-// there's no hosted media yet, or the hosted image fails to load.
-function itemIconFallback(item: MyLootItem): string | undefined {
-  return item.media?.original_name
-    ? `https://assets.rpglogs.com/img/warcraft/abilities/${item.media.original_name}`
-    : undefined;
+// image is preferred, but falls back to a local blank placeholder
+// (never a third-party CDN) when there's no hosted media yet, or the
+// hosted image fails to load.
+function itemIconSrc(item: MyLootItem): string {
+  return item.media?.full_path ?? blankIcon;
 }
-function itemIconSrc(item: MyLootItem): string | undefined {
-  return item.media?.full_path ?? itemIconFallback(item);
-}
-function onItemIconError(item: MyLootItem, event: Event) {
-  const fallback = itemIconFallback(item);
+function onItemIconError(event: Event) {
   const img = event.target as HTMLImageElement;
-  if (fallback && img.src !== fallback) img.src = fallback;
+  if (img.src !== blankIcon) img.src = blankIcon;
 }
 
 const characters = computed(() => store.myLoot?.characters ?? []);
@@ -193,12 +188,11 @@ const responseTotals = computed(() => {
             </div>
             <div v-for="loot in activeInstance?.loots ?? []" :key="loot.id" class="loot-row">
               <img
-                v-if="itemIconSrc(loot.item)"
                 class="loot-icon"
                 :src="itemIconSrc(loot.item)"
                 alt=""
                 :style="{ borderColor: qualityColor(loot.item.quality) }"
-                @error="onItemIconError(loot.item, $event)"
+                @error="onItemIconError($event)"
               />
               <div class="loot-info">
                 <button
