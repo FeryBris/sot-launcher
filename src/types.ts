@@ -123,6 +123,11 @@ export interface GuildSyncTalents {
   first_points: number[][]
   second_tree: string | null
   second_points: number[][]
+  /** Which dual-spec group (1 or 2) was actually active in-game during
+   *  this collection — first_points/second_points look identical whether
+   *  freshly collected or carried forward, so the website needs this to
+   *  know which one is current. */
+  active_group: number
 }
 
 /** `id` is the glyph EFFECT's spell ID (what GetGlyphSocketInfo reports),

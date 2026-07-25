@@ -251,6 +251,18 @@ pub struct GuildSyncTalents {
     pub second_tree: Option<String>,
     #[serde(default)]
     pub second_points: Vec<Vec<i64>>,
+    /// Which dual-spec group (1 or 2) was actually active in-game during
+    /// this collection — first_points/second_points look identical
+    /// whether freshly collected or carried forward from a previous
+    /// snapshot, so the website needs this to know which one is current.
+    /// Defaults to 1 for older SavedVariables entries written before this
+    /// field existed.
+    #[serde(default = "default_active_group")]
+    pub active_group: i64,
+}
+
+fn default_active_group() -> i64 {
+    1
 }
 
 /// A single socketed glyph — `id` is the glyph EFFECT's spell ID (what
