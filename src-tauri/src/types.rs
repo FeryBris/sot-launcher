@@ -253,6 +253,32 @@ pub struct GuildSyncTalents {
     pub second_points: Vec<Vec<i64>>,
 }
 
+/// A single socketed glyph — `id` is the glyph EFFECT's spell ID (what
+/// GetGlyphSocketInfo reports), not an item ID.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GuildSyncGlyph {
+    pub id: i64,
+    pub name: Option<String>,
+    #[serde(rename = "type")]
+    pub glyph_type: Option<String>,
+}
+
+/// Deliberately not camelCase-renamed, matching GuildSyncTalents — the
+/// addon's collectGlyphs() writes these 2 keys as snake_case. Glyphs are
+/// tied to the active dual-spec loadout the same way talents are (and
+/// this server's client has the same "can't read the inactive group"
+/// limitation, confirmed for talents — see GuildSyncTalents above), so
+/// first_glyphs/second_glyphs follow the identical convention: whichever
+/// spec is active gets refreshed, the other slot carries forward its
+/// last-known snapshot.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GuildSyncGlyphs {
+    #[serde(default)]
+    pub first_glyphs: Vec<GuildSyncGlyph>,
+    #[serde(default)]
+    pub second_glyphs: Vec<GuildSyncGlyph>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GuildSyncProfessions {
@@ -323,6 +349,11 @@ pub struct GuildSyncData {
     #[serde(default)]
     pub equipment: Vec<GuildSyncEquipmentItem>,
     pub talents: GuildSyncTalents,
+    // Older SavedVariables entries (written before this field existed)
+    // won't have a "glyphs" key at all — default to empty instead of
+    // failing to deserialize the whole character.
+    #[serde(default)]
+    pub glyphs: GuildSyncGlyphs,
     pub honorable_kills: i64,
     pub achievement_points: i64,
     pub stats: GuildSyncStats,

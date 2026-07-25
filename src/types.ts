@@ -125,6 +125,25 @@ export interface GuildSyncTalents {
   second_points: number[][]
 }
 
+/** `id` is the glyph EFFECT's spell ID (what GetGlyphSocketInfo reports),
+ *  not an item ID. */
+export interface GuildSyncGlyph {
+  id: number
+  name: string | null
+  type: 'major' | 'minor' | null
+}
+
+/** Deliberately not camelCase, matching GuildSyncTalents — glyphs are
+ *  tied to the active dual-spec loadout the same way talents are (same
+ *  "can't read the inactive group" server limitation), so first_glyphs/
+ *  second_glyphs follow the identical convention: whichever spec is
+ *  active gets refreshed, the other slot carries forward its last-known
+ *  snapshot. */
+export interface GuildSyncGlyphs {
+  first_glyphs: GuildSyncGlyph[]
+  second_glyphs: GuildSyncGlyph[]
+}
+
 export interface GuildSyncProfessions {
   first: string | null
   firstSkill: number | null
@@ -281,6 +300,7 @@ export interface GuildSyncData {
   gold: number
   equipment: GuildSyncEquipmentItem[]
   talents: GuildSyncTalents
+  glyphs: GuildSyncGlyphs
   honorableKills: number
   achievementPoints: number
   stats: GuildSyncStats
