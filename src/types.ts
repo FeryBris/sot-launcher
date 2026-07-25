@@ -111,11 +111,14 @@ export interface GuildSyncEquipmentItem {
   icon: string | null
 }
 
+/** Deliberately not camelCase — the addon's own collectTalents() writes
+ *  these 4 fields as snake_case already, unlike the rest of GuildSyncData
+ *  (matches the Rust side's GuildSyncTalents, which isn't renamed either). */
 export interface GuildSyncTalents {
-  firstTree: string | null
-  firstPoints: number[]
-  secondTree: string | null
-  secondPoints: number[]
+  first_tree: string | null
+  first_points: number[]
+  second_tree: string | null
+  second_points: number[]
 }
 
 export interface GuildSyncProfessions {

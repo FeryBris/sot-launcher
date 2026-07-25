@@ -227,8 +227,14 @@ pub struct GuildSyncEquipmentItem {
     pub icon: Option<String>,
 }
 
+/// Deliberately not camelCase-renamed, unlike its sibling structs — the
+/// addon's own collectTalents() emits these 4 keys as snake_case already
+/// (same reasoning as GuildSyncStats below). The camelCase rename that
+/// used to be here was silently discarding every one of these fields on
+/// deserialization (missing Option<T>/#[serde(default)] fields just come
+/// back None/empty instead of erroring), so talents were empty both in
+/// the launcher's own display and in what got synced to the website.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct GuildSyncTalents {
     pub first_tree: Option<String>,
     #[serde(default)]
