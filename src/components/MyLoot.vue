@@ -37,9 +37,11 @@ const RESPONSE_COLOR: Record<string, string> = {
   'Offspec/Greed': '#ff7c0a',
   'Small Upgrade but not BiS': '#00ccff',
   // No color-variant token for this one on the website (lootResponse
-  // .abbreviation is null for ML/Roll) — a neutral gray, since it's a
-  // less deliberate pick than the other whitelisted responses.
-  'ML/Roll': '#9d9d9d',
+  // .abbreviation is null for ML/Roll). A plain gray here read as
+  // "uncolored" against --text-dim (#9aa3b2, nearly identical) — a soft
+  // lavender instead, distinct from both the dim text and the other 4
+  // hues, while still visually "less deliberate" than a real upgrade pick.
+  'ML/Roll': '#f48cba',
 };
 function responseColor(name: string | null): string | undefined {
   return (name && RESPONSE_COLOR[name]) || undefined;
@@ -218,11 +220,7 @@ const responseTotals = computed(() => {
                   </template>
                 </span>
               </div>
-              <div
-                v-if="loot.count"
-                class="loot-count"
-                title="Total times looted in this instance"
-              >
+              <div v-if="loot.count" class="loot-count" title="Total times looted in this instance">
                 <span class="loot-count-label">Total</span>
                 <span class="loot-count-value">×{{ loot.count }}</span>
               </div>
