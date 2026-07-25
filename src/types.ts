@@ -113,12 +113,16 @@ export interface GuildSyncEquipmentItem {
 
 /** Deliberately not camelCase — the addon's own collectTalents() writes
  *  these 4 fields as snake_case already, unlike the rest of GuildSyncData
- *  (matches the Rust side's GuildSyncTalents, which isn't renamed either). */
+ *  (matches the Rust side's GuildSyncTalents, which isn't renamed either).
+ *  first_points/second_points hold every one of the class's 3 trees' full
+ *  per-talent point arrays (in tab order), not just the dominant tree —
+ *  WotLK dual spec means first/second are two independent full loadouts,
+ *  each of which can spend points across all 3 trees at once. */
 export interface GuildSyncTalents {
   first_tree: string | null
-  first_points: number[]
+  first_points: number[][]
   second_tree: string | null
-  second_points: number[]
+  second_points: number[][]
 }
 
 export interface GuildSyncProfessions {

@@ -234,14 +234,23 @@ pub struct GuildSyncEquipmentItem {
 /// deserialization (missing Option<T>/#[serde(default)] fields just come
 /// back None/empty instead of erroring), so talents were empty both in
 /// the launcher's own display and in what got synced to the website.
+///
+/// `first_tree`/`second_tree` name whichever tree has the most points in
+/// that loadout, for display — but WotLK dual spec means each of
+/// first/second is a full independent loadout that can spend points in
+/// all 3 of the class's trees at once (e.g. a Demonology-leaning build
+/// still putting points in Affliction), so `first_points`/`second_points`
+/// carry every tree's full per-talent point array, in tab order — not
+/// just the dominant tree's. `second_*` are empty/None when the
+/// character hasn't unlocked dual spec yet.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GuildSyncTalents {
     pub first_tree: Option<String>,
     #[serde(default)]
-    pub first_points: Vec<i64>,
+    pub first_points: Vec<Vec<i64>>,
     pub second_tree: Option<String>,
     #[serde(default)]
-    pub second_points: Vec<i64>,
+    pub second_points: Vec<Vec<i64>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
