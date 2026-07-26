@@ -436,6 +436,23 @@ pub struct GuildSyncArenaTeam {
     pub members: Vec<GuildSyncArenaTeamMember>,
 }
 
+/// todayHK/todayHonor/yesterdayHK/yesterdayHonor/lifetimeHK/lifetimeRank —
+/// confirmed field order live via GetInspectHonorData(). "lifetime" here
+/// reads as current-season-only on this server (a level 80 with real past
+/// honorable kills came back 0 across the board), so it's complementary
+/// to `GuildSyncData::honorable_kills` (the true lifetime total from
+/// GetPVPLifetimeStats()), not a replacement for it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuildSyncHonorData {
+    pub today_honorable_kills: Option<i64>,
+    pub today_honor: Option<i64>,
+    pub yesterday_honorable_kills: Option<i64>,
+    pub yesterday_honor: Option<i64>,
+    pub lifetime_honorable_kills: Option<i64>,
+    pub lifetime_rank: Option<i64>,
+}
+
 /// Parsed straight from the SoTGuildSync addon's SavedVariables JSON blob.
 /// Used unchanged both to display in the launcher and as the sync-to-web
 /// payload — see `guild_sync::read_guild_sync_data`.
@@ -473,5 +490,7 @@ pub struct GuildSyncData {
     pub currency: GuildSyncCurrency,
     #[serde(default)]
     pub arena_teams: Vec<GuildSyncArenaTeam>,
+    #[serde(default)]
+    pub honor_data: Option<GuildSyncHonorData>,
     pub updated_at: i64,
 }
