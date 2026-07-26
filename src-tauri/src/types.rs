@@ -344,6 +344,98 @@ pub struct GuildSyncStats {
     pub resistance_shadow: Option<i64>,
 }
 
+/// One faction row from GetFactionInfo, reported unfiltered — isHeader/
+/// hasRep don't reliably mark "real faction" on this server (confirmed
+/// live), so the addon just sends everything it saw and lets the website
+/// decide what's worth showing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuildSyncReputationEntry {
+    pub name: String,
+    pub standing: Option<i64>,
+    pub value: Option<i64>,
+    pub max: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuildSyncRecentAchievement {
+    pub id: i64,
+    pub name: Option<String>,
+    pub points: Option<i64>,
+    pub month: Option<i64>,
+    pub day: Option<i64>,
+    pub year: Option<i64>,
+}
+
+/// `total`/`completed` come from a GetCategoryNumAchievements(catID, true)
+/// scan — the `true` (includeAll) is required, without it this undercounts
+/// (confirmed live: 911 vs. the 1058 the in-game Achievements frame itself
+/// reports). Overall point total is tracked separately on
+/// GuildSyncData::achievement_points, not duplicated here.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuildSyncAchievements {
+    #[serde(default)]
+    pub total: i64,
+    #[serde(default)]
+    pub completed: i64,
+    #[serde(default)]
+    pub recent: Vec<GuildSyncRecentAchievement>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuildSyncCurrencyItem {
+    pub name: String,
+    pub count: Option<i64>,
+    pub item_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuildSyncCurrency {
+    pub honor: Option<i64>,
+    pub arena: Option<i64>,
+    #[serde(default)]
+    pub items: Vec<GuildSyncCurrencyItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuildSyncArenaTeamMember {
+    pub name: String,
+    pub rank: Option<i64>,
+    pub level: Option<i64>,
+    pub class: Option<String>,
+    pub online: bool,
+    pub played: Option<i64>,
+    pub wins: Option<i64>,
+    pub season_played: Option<i64>,
+    pub season_wins: Option<i64>,
+    pub personal_rating: Option<i64>,
+}
+
+/// `size` (2/3/5) is what the website maps to "2v2"/"3v3"/"5v5" — the
+/// addon has no way to read those strings directly, only team size.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuildSyncArenaTeam {
+    pub name: String,
+    pub size: Option<i64>,
+    pub rating: Option<i64>,
+    pub week_played: Option<i64>,
+    pub week_wins: Option<i64>,
+    pub season_played: Option<i64>,
+    pub season_wins: Option<i64>,
+    pub player_played: Option<i64>,
+    pub season_player_played: Option<i64>,
+    pub rank: Option<i64>,
+    pub player_rating: Option<i64>,
+    #[serde(default)]
+    pub members: Vec<GuildSyncArenaTeamMember>,
+}
+
 /// Parsed straight from the SoTGuildSync addon's SavedVariables JSON blob.
 /// Used unchanged both to display in the launcher and as the sync-to-web
 /// payload — see `guild_sync::read_guild_sync_data`.
@@ -370,5 +462,16 @@ pub struct GuildSyncData {
     pub achievement_points: i64,
     pub stats: GuildSyncStats,
     pub professions: GuildSyncProfessions,
+    // Reputation/achievements/currency/arenaTeams are all newer than the
+    // rest of this payload — default to empty/zeroed rather than failing
+    // to deserialize a character synced before the addon gathered them.
+    #[serde(default)]
+    pub reputation: Vec<GuildSyncReputationEntry>,
+    #[serde(default)]
+    pub achievements: GuildSyncAchievements,
+    #[serde(default)]
+    pub currency: GuildSyncCurrency,
+    #[serde(default)]
+    pub arena_teams: Vec<GuildSyncArenaTeam>,
     pub updated_at: i64,
 }
