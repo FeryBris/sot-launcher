@@ -224,6 +224,7 @@ pub async fn sync_guild_data_to_web(app: AppHandle, state: State<'_, AppState>) 
         kind: "characters".to_string(),
         success: result.is_ok(),
         error: result.as_ref().err().cloned(),
+        raid_id: None,
     });
     result
 }
@@ -285,6 +286,7 @@ pub async fn sync_guild_roster_to_web(app: AppHandle, state: State<'_, AppState>
         kind: "guild-roster".to_string(),
         success: result.is_ok(),
         error: result.as_ref().err().cloned(),
+        raid_id: None,
     });
     result
 }
@@ -325,6 +327,125 @@ pub fn get_sync_log(app: AppHandle) -> Result<Vec<crate::types::SyncLogEntry>, S
     crate::sync_log::load_sync_log(&app)
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncableRaid {
+    pub raid_id: String,
+    pub captured_at: i64,
+    pub raid_json: String,
+    pub loot_json: Option<String>,
+    /// True if a successful "raid" sync_log entry already exists for this
+    /// raid_id — lets the Raids view show it as already-synced instead of
+    /// silently vanishing (SoTRaidLootSyncDB itself has no notion of sync
+    /// status, only the launcher's own sync_log does).
+    pub already_synced: bool,
+}
+
+/// Lists raids the SoTRaidLootSync addon has captured (recent ones only —
+/// see that addon's own age window), each annotated with whether this
+/// launcher has already successfully synced it. Empty covers "addon not
+/// installed" and "nothing captured yet" alike — neither is an error for
+/// the Raids view, which just wants to know what's available.
+#[tauri::command]
+pub fn get_captured_raids(app: AppHandle) -> Result<Vec<SyncableRaid>, String> {
+    let s = settings::load_settings(&app)?;
+    let game_path = s.game_path().ok_or_else(|| "no game folder configured".to_string())?;
+
+    let raids = crate::raid_loot_sync::read_captured_raids(Path::new(&game_path))?;
+    let log = crate::sync_log::load_sync_log(&app).unwrap_or_default();
+
+    let synced_ids: std::collections::HashSet<String> = log
+        .iter()
+        .filter(|e| e.kind == "raid" && e.success)
+        .filter_map(|e| e.raid_id.clone())
+        .collect();
+
+    Ok(raids
+        .into_iter()
+        .map(|r| SyncableRaid {
+            already_synced: synced_ids.contains(&r.raid_id),
+            raid_id: r.raid_id,
+            captured_at: r.captured_at,
+            raid_json: r.raid_json,
+            loot_json: r.loot_json,
+        })
+        .collect())
+}
+
+#[derive(serde::Serialize)]
+struct SyncRaidPayload<'a> {
+    #[serde(rename = "raidJson")]
+    raid_json: &'a str,
+    #[serde(rename = "lootJson")]
+    loot_json: Option<&'a str>,
+    #[serde(rename = "isMain")]
+    is_main: bool,
+}
+
+/// Pushes one captured raid (see get_captured_raids) to the website —
+/// RaidSyncController runs RaidImport and (always) LootImport server-side
+/// against it. Officer-gated server-side, not just in this UI. Every
+/// attempt is recorded via sync_log the same way character/roster sync
+/// is, which is also what get_captured_raids checks to mark a raid as
+/// already synced.
+#[tauri::command]
+pub async fn sync_raid_to_web(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    raid_id: String,
+    is_main: bool,
+) -> Result<(), String> {
+    let result = sync_raid_to_web_inner(&app, &state, &raid_id, is_main).await;
+
+    crate::sync_log::append_sync_log(&app, crate::types::SyncLogEntry {
+        at: crate::sync_log::now_ms(),
+        kind: "raid".to_string(),
+        success: result.is_ok(),
+        error: result.as_ref().err().cloned(),
+        raid_id: Some(raid_id),
+    });
+
+    result
+}
+
+async fn sync_raid_to_web_inner(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    raid_id: &str,
+    is_main: bool,
+) -> Result<(), String> {
+    let s = settings::load_settings(app)?;
+    let game_path = s.game_path().ok_or_else(|| "no game folder configured".to_string())?;
+    let token = s
+        .discord_token
+        .as_deref()
+        .filter(|t| !t.is_empty())
+        .ok_or_else(|| "sign in with Discord first".to_string())?;
+
+    let raids = crate::raid_loot_sync::read_captured_raids(Path::new(&game_path))?;
+    let raid = raids
+        .into_iter()
+        .find(|r| r.raid_id == raid_id)
+        .ok_or_else(|| "raid not found — it may have aged out of the addon's capture window".to_string())?;
+
+    let url = format!("{}/raids/sync", crate::config::API_BASE_URL.trim_end_matches('/'));
+    let req = state.http.post(&url)
+        .bearer_auth(token)
+        .header("X-API-KEY", crate::config::API_KEY)
+        .header("Accept", "application/json")
+        .json(&SyncRaidPayload {
+            raid_json: &raid.raid_json,
+            loot_json: raid.loot_json.as_deref(),
+            is_main,
+        });
+
+    let resp = req.send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {} while syncing raid", resp.status()));
+    }
+    Ok(())
+}
+
 /// Fetches the signed-in user's own characters' loot, grouped by raid, for
 /// the "My Loot" tab. Relayed as raw JSON rather than a typed struct —
 /// unlike the addon-file readers, this data never gets inspected or
@@ -363,6 +484,8 @@ struct PairUser {
     discord_username: Option<String>,
     #[serde(rename = "discordAvatar")]
     discord_avatar: Option<String>,
+    #[serde(rename = "isOfficer", default)]
+    is_officer: bool,
 }
 
 /// Exchanges a one-time pairing code (from the sot-launcher://pair deep
@@ -393,6 +516,7 @@ pub async fn exchange_pair_code(
     s.discord_token = Some(body.token);
     s.discord_username = body.user.discord_username;
     s.discord_avatar = body.user.discord_avatar;
+    s.is_officer = body.user.is_officer;
     settings::save_settings(app, &s)?;
     Ok(s)
 }
@@ -422,6 +546,7 @@ pub async fn clear_discord_login(app: AppHandle, state: State<'_, AppState>) -> 
     s.discord_token = None;
     s.discord_username = None;
     s.discord_avatar = None;
+    s.is_officer = false;
     settings::save_settings(&app, &s)?;
     Ok(s)
 }

@@ -10,6 +10,7 @@ import type {
   Manifest,
   MyLootResponse,
   Settings,
+  SyncableRaid,
   SyncLogEntry,
   SyncProgress,
 } from './types'
@@ -99,6 +100,18 @@ export function syncGuildRosterToWeb(): Promise<void> {
 /** Newest first — see Settings > Sync Logs. */
 export function getSyncLog(): Promise<SyncLogEntry[]> {
   return invoke('get_sync_log')
+}
+
+/** Recent raids the SoTRaidLootSync addon has captured, each annotated
+ *  with whether this launcher has already synced it — powers the Raids tab. */
+export function getCapturedRaids(): Promise<SyncableRaid[]> {
+  return invoke('get_captured_raids')
+}
+
+/** Pushes one captured raid to the website (RaidImport + LootImport
+ *  server-side) — officer-gated server-side regardless of what this UI shows. */
+export function syncRaidToWeb(raidId: string, isMain: boolean): Promise<void> {
+  return invoke('sync_raid_to_web', { raidId, isMain })
 }
 
 export function getMyLoot(): Promise<MyLootResponse> {

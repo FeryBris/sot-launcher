@@ -2,6 +2,7 @@ mod commands;
 mod config;
 mod guild_roster;
 mod guild_sync;
+mod raid_loot_sync;
 mod settings;
 mod sync;
 mod sync_log;
@@ -169,6 +170,8 @@ pub fn run() {
       commands::get_guild_roster,
       commands::sync_guild_roster_to_web,
       commands::get_sync_log,
+      commands::get_captured_raids,
+      commands::sync_raid_to_web,
       commands::get_my_loot,
     ])
     .run(tauri::generate_context!())

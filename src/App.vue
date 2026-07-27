@@ -5,13 +5,14 @@ import { relaunch } from '@tauri-apps/plugin-process'
 import { getVersion } from '@tauri-apps/api/app'
 import HomeView from './views/Home.vue'
 import AddonsView from './views/Addons.vue'
+import RaidsView from './views/Raids.vue'
 import SettingsView from './views/Settings.vue'
 import PlayBar from './components/PlayBar.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import { init as initStore, playNow, signInWithDiscord, store } from './store'
 import { onTrayPrimaryClicked, setTrayPrimaryLabel } from './api'
 
-type Tab = 'home' | 'addons' | 'settings'
+type Tab = 'home' | 'addons' | 'raids' | 'settings'
 
 const tab = ref<Tab>('home')
 const appVersion = ref('')
@@ -70,6 +71,15 @@ watch(updateAvailable, (val) => {
   void setTrayPrimaryLabel(val ? 'Update' : 'Play')
 }, { immediate: true })
 
+// The Raids tab (and its nav button) only render for officers — if that
+// stops being true mid-session (e.g. sign-out), fall back off a tab that
+// no longer has anything to show instead of leaving the content area blank.
+watch(() => store.settings.isOfficer, (isOfficer) => {
+  if (!isOfficer && tab.value === 'raids') {
+    tab.value = 'home'
+  }
+})
+
 onMounted(async () => {
   appVersion.value = await getVersion()
   await initStore()
@@ -103,6 +113,14 @@ onMounted(async () => {
       <nav class="nav">
         <button class="nav-item" :class="{ active: tab === 'home' }" @click="tab = 'home'">Home</button>
         <button class="nav-item" :class="{ active: tab === 'addons' }" @click="tab = 'addons'">Addons</button>
+        <button
+          v-if="store.settings.isOfficer"
+          class="nav-item"
+          :class="{ active: tab === 'raids' }"
+          @click="tab = 'raids'"
+        >
+          Raids
+        </button>
         <button class="nav-item" :class="{ active: tab === 'settings' }" @click="tab = 'settings'">Settings</button>
       </nav>
 
@@ -142,6 +160,7 @@ onMounted(async () => {
     <main class="content">
       <HomeView v-show="tab === 'home'" />
       <AddonsView v-show="tab === 'addons'" />
+      <RaidsView v-if="store.settings.isOfficer" v-show="tab === 'raids'" />
       <SettingsView v-show="tab === 'settings'" />
     </main>
   </div>

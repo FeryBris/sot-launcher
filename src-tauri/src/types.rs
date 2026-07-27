@@ -87,6 +87,10 @@ pub struct Settings {
     pub discord_username: Option<String>,
     #[serde(default)]
     pub discord_avatar: Option<String>,
+    /// Whether the paired Discord user holds officer guild rank, as of the
+    /// last pairing exchange — gates the Raids tab/Sync Raid action.
+    #[serde(default)]
+    pub is_officer: bool,
 }
 
 fn default_true() -> bool {
@@ -462,11 +466,16 @@ pub struct GuildSyncHonorData {
 pub struct SyncLogEntry {
     /// Unix epoch milliseconds when the attempt finished.
     pub at: i64,
-    /// "characters" | "guild-roster"
+    /// "characters" | "guild-roster" | "raid"
     pub kind: String,
     pub success: bool,
     #[serde(default)]
     pub error: Option<String>,
+    /// Set only for kind "raid" — the HeadCount raid start-time id (see
+    /// raid_loot_sync::CapturedRaid). get_captured_raids scans successful
+    /// "raid" entries by this to mark a raid as already synced.
+    #[serde(default)]
+    pub raid_id: Option<String>,
 }
 
 /// Parsed straight from the SoTGuildSync addon's SavedVariables JSON blob.

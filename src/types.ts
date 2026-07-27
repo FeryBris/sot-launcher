@@ -40,6 +40,8 @@ export interface Settings {
   discordToken: string | null
   discordUsername: string | null
   discordAvatar: string | null
+  /** Whether the paired Discord user holds officer guild rank, as of the last pairing exchange. */
+  isOfficer: boolean
 }
 
 export interface AddonStateEntry {
@@ -299,6 +301,20 @@ export interface SyncLogEntry {
   kind: 'characters' | 'guild-roster'
   success: boolean
   error: string | null
+}
+
+/** One raid the SoTRaidLootSync addon has captured (recent ones only —
+ *  see that addon's own age window). raidJson/lootJson are opaque JSON
+ *  strings (HeadCount's and RCLootCouncil's own export formats) — the
+ *  launcher never parses their contents beyond what's needed to show a
+ *  human-readable summary, the website's importers own that. lootJson is
+ *  null for a raid with no RCLootCouncil data, which is a normal case. */
+export interface SyncableRaid {
+  raidId: string
+  capturedAt: number
+  raidJson: string
+  lootJson: string | null
+  alreadySynced: boolean
 }
 
 /** Parsed from the SoTGuildSync addon's SavedVariables — used unchanged
