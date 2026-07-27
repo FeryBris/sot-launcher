@@ -10,6 +10,7 @@ import type {
   Manifest,
   MyLootResponse,
   Settings,
+  SyncLogEntry,
   SyncProgress,
 } from './types'
 
@@ -93,6 +94,11 @@ export function getGuildRoster(): Promise<GuildRosterData | null> {
 
 export function syncGuildRosterToWeb(): Promise<void> {
   return invoke('sync_guild_roster_to_web')
+}
+
+/** Newest first — see Settings > Sync Logs. */
+export function getSyncLog(): Promise<SyncLogEntry[]> {
+  return invoke('get_sync_log')
 }
 
 export function getMyLoot(): Promise<MyLootResponse> {

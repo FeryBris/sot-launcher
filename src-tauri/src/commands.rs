@@ -213,10 +213,23 @@ struct SyncCharactersPayload<'a> {
 
 /// Reads the same snapshot `get_guild_sync_data` does and POSTs every
 /// known guild character in one batch, authenticated the same way
-/// `/unpair` already is.
+/// `/unpair` already is. Every attempt — success or failure, including
+/// preconditions like "not signed in" — is recorded via sync_log so the
+/// Settings > Sync Logs view can explain a silent auto-sync miss.
 #[tauri::command]
 pub async fn sync_guild_data_to_web(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    let s = settings::load_settings(&app)?;
+    let result = sync_guild_data_to_web_inner(&app, &state).await;
+    crate::sync_log::append_sync_log(&app, crate::types::SyncLogEntry {
+        at: crate::sync_log::now_ms(),
+        kind: "characters".to_string(),
+        success: result.is_ok(),
+        error: result.as_ref().err().cloned(),
+    });
+    result
+}
+
+async fn sync_guild_data_to_web_inner(app: &AppHandle, state: &State<'_, AppState>) -> Result<(), String> {
+    let s = settings::load_settings(app)?;
     let game_path = s.game_path().ok_or_else(|| "no game folder configured".to_string())?;
     let token = s
         .discord_token
@@ -263,9 +276,21 @@ struct SyncRosterPayload<'a> {
 
 /// Reads the same snapshot `get_guild_roster` does and POSTs the full
 /// roster in one batch, authenticated the same way character sync is.
+/// Same sync_log recording as sync_guild_data_to_web, see there.
 #[tauri::command]
 pub async fn sync_guild_roster_to_web(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    let s = settings::load_settings(&app)?;
+    let result = sync_guild_roster_to_web_inner(&app, &state).await;
+    crate::sync_log::append_sync_log(&app, crate::types::SyncLogEntry {
+        at: crate::sync_log::now_ms(),
+        kind: "guild-roster".to_string(),
+        success: result.is_ok(),
+        error: result.as_ref().err().cloned(),
+    });
+    result
+}
+
+async fn sync_guild_roster_to_web_inner(app: &AppHandle, state: &State<'_, AppState>) -> Result<(), String> {
+    let s = settings::load_settings(app)?;
     let game_path = s.game_path().ok_or_else(|| "no game folder configured".to_string())?;
     let token = s
         .discord_token
@@ -292,6 +317,12 @@ pub async fn sync_guild_roster_to_web(app: AppHandle, state: State<'_, AppState>
         return Err(format!("HTTP {} while syncing guild roster", resp.status()));
     }
     Ok(())
+}
+
+/// Reads the recorded sync history (newest first) for Settings > Sync Logs.
+#[tauri::command]
+pub fn get_sync_log(app: AppHandle) -> Result<Vec<crate::types::SyncLogEntry>, String> {
+    crate::sync_log::load_sync_log(&app)
 }
 
 /// Fetches the signed-in user's own characters' loot, grouped by raid, for

@@ -291,6 +291,16 @@ export interface MyLootResponse {
   characters: MyLootCharacter[]
 }
 
+/** One recorded attempt at syncing data to the guild website — see
+ *  Settings > Sync Logs. `error` is set only when `success` is false. */
+export interface SyncLogEntry {
+  /** Unix epoch milliseconds. */
+  at: number
+  kind: 'characters' | 'guild-roster'
+  success: boolean
+  error: string | null
+}
+
 /** Parsed from the SoTGuildSync addon's SavedVariables — used unchanged
  *  for both local display and the sync-to-web payload. */
 export interface GuildSyncData {

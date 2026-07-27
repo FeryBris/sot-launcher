@@ -453,6 +453,22 @@ pub struct GuildSyncHonorData {
     pub lifetime_rank: Option<i64>,
 }
 
+/// One attempt at syncing data to the guild website — recorded for both
+/// successes and failures so the Settings > Sync Logs view can show why an
+/// auto-sync silently didn't go through (e.g. not signed in, server error),
+/// not just that data hasn't updated. See sync_log.rs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncLogEntry {
+    /// Unix epoch milliseconds when the attempt finished.
+    pub at: i64,
+    /// "characters" | "guild-roster"
+    pub kind: String,
+    pub success: bool,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
 /// Parsed straight from the SoTGuildSync addon's SavedVariables JSON blob.
 /// Used unchanged both to display in the launcher and as the sync-to-web
 /// payload — see `guild_sync::read_guild_sync_data`.

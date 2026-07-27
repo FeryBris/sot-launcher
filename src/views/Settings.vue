@@ -13,6 +13,9 @@ import {
 import { isWindows } from '../platform'
 import * as api from '../api'
 import type { LutrisGame } from '../types'
+import SyncLogsDialog from '../components/SyncLogsDialog.vue'
+
+const showSyncLogs = ref(false)
 
 const launchCmdDraft = ref(store.settings.launchCommand ?? '')
 const launchCmdSaved = ref(false)
@@ -201,6 +204,19 @@ async function onAutoLaunchChange(e: Event) {
       <p v-if="store.discordError" class="hint error">{{ store.discordError }}</p>
       <p class="hint">Links your Discord identity so your WTF folder can sync across devices.</p>
     </section>
+
+    <section class="field">
+      <label>Sync</label>
+      <div class="row">
+        <button class="btn" @click="showSyncLogs = true">View Sync Logs</button>
+      </div>
+      <p class="hint">
+        Your character and guild roster data sync to the website automatically in the background.
+        See the log for a history of those attempts, including any that failed and why.
+      </p>
+    </section>
+
+    <SyncLogsDialog v-if="showSyncLogs" @close="showSyncLogs = false" />
   </div>
 </template>
 
