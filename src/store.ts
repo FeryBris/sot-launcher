@@ -65,6 +65,7 @@ export const store = reactive<Store>({
     discordToken: null,
     discordUsername: null,
     discordAvatar: null,
+    isOfficer: false,
   },
   apiBaseUrl: '',
   manifest: null,
