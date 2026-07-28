@@ -96,6 +96,25 @@ pub fn get_api_base_url() -> &'static str {
     crate::config::API_BASE_URL
 }
 
+/// Whether `downloadAndInstall()` can actually succeed here. Windows
+/// (NSIS) and macOS (.app.tar.gz) installs always support Tauri's
+/// self-updater; on Linux only an AppImage does, since it works by
+/// replacing the running binary in place — a .deb/.rpm/pacman install
+/// lives under /usr/bin, owned by root, so that overwrite fails with a
+/// read-only/permission error instead. The frontend uses this to offer a
+/// manual download link there rather than a button that's doomed to fail.
+#[tauri::command]
+pub fn is_self_update_supported() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        std::env::var_os("APPIMAGE").is_some()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        true
+    }
+}
+
 #[tauri::command]
 pub fn set_launch_command(app: AppHandle, command: String) -> Result<Settings, String> {
     let mut s = settings::load_settings(&app)?;

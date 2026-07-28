@@ -150,6 +150,7 @@ pub fn run() {
     .invoke_handler(tauri::generate_handler![
       commands::get_settings,
       commands::get_api_base_url,
+      commands::is_self_update_supported,
       commands::set_tray_primary_label,
       commands::set_game_path_windows,
       commands::set_game_path_linux,

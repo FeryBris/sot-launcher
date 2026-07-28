@@ -10,12 +10,17 @@ import SettingsView from './views/Settings.vue'
 import PlayBar from './components/PlayBar.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import { init as initStore, playNow, signInWithDiscord, store } from './store'
-import { onTrayPrimaryClicked, setTrayPrimaryLabel } from './api'
+import { isSelfUpdateSupported, onTrayPrimaryClicked, openLauncherDownloadPage, setTrayPrimaryLabel } from './api'
 
 type Tab = 'home' | 'addons' | 'raids' | 'settings'
 
 const tab = ref<Tab>('home')
 const appVersion = ref('')
+
+// False for a Linux install that isn't an AppImage (.deb/.rpm/pacman) —
+// downloadAndInstall() can't replace a binary under /usr/bin there, so
+// those users get a link to the download page instead of an install button.
+const selfUpdateSupported = ref(true)
 
 const updateAvailable = shallowRef<Update | null>(null)
 const updateState = ref<'idle' | 'checking' | 'downloading' | 'ready' | 'error'>('idle')
@@ -41,6 +46,10 @@ async function checkUpdate() {
 
 async function installUpdate() {
   if (!updateAvailable.value) return
+  if (!selfUpdateSupported.value) {
+    void openLauncherDownloadPage(store.apiBaseUrl)
+    return
+  }
   updateState.value = 'downloading'
   let downloaded = 0
   let total = 0
@@ -83,6 +92,7 @@ watch(() => store.settings.isOfficer, (isOfficer) => {
 onMounted(async () => {
   appVersion.value = await getVersion()
   await initStore()
+  selfUpdateSupported.value = await isSelfUpdateSupported()
   checkUpdate()
 
   await onTrayPrimaryClicked(() => {
@@ -134,9 +144,10 @@ onMounted(async () => {
             :disabled="updateState === 'downloading'"
             @click="installUpdate"
           >
-            {{ updateState === 'downloading' ? `Updating ${updateProgress}%` : 'Update & Restart' }}
+            <template v-if="!selfUpdateSupported">Download update</template>
+            <template v-else>{{ updateState === 'downloading' ? `Updating ${updateProgress}%` : 'Update & Restart' }}</template>
           </button>
-          <div v-if="updateState === 'error'" class="update-install-error" :title="updateError">
+          <div v-if="selfUpdateSupported && updateState === 'error'" class="update-install-error" :title="updateError">
             Update failed — try again
           </div>
         </div>

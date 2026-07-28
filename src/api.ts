@@ -34,6 +34,12 @@ export function getApiBaseUrl(): Promise<string> {
   return invoke('get_api_base_url')
 }
 
+/** False on a Linux install that isn't an AppImage (.deb/.rpm/pacman) —
+ *  Tauri's self-updater can't replace a binary under /usr/bin there. */
+export function isSelfUpdateSupported(): Promise<boolean> {
+  return invoke('is_self_update_supported')
+}
+
 export function setLaunchCommand(command: string): Promise<Settings> {
   return invoke('set_launch_command', { command })
 }
@@ -164,6 +170,15 @@ export function openCharacterPage(apiBaseUrl: string, name: string): Promise<voi
 /** Opens an item's Wowhead page (WotLK client DB) in the system browser. */
 export function openWowheadItem(wowheadId: number): Promise<void> {
   return open(`https://www.wowhead.com/wotlk/item=${wowheadId}`)
+}
+
+/** Opens the guild site's launcher download page — where isSelfUpdateSupported()
+ *  is false, App.vue links here instead of offering an in-app install. */
+export function openLauncherDownloadPage(apiBaseUrl: string): Promise<void> {
+  const site = new URL(apiBaseUrl)
+  site.pathname = '/sot-launcher'
+  site.search = ''
+  return open(site.toString())
 }
 
 export function pairWithCode(code: string): Promise<Settings> {
