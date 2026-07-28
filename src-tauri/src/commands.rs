@@ -339,6 +339,10 @@ pub struct SyncableRaid {
     /// silently vanishing (SoTRaidLootSyncDB itself has no notion of sync
     /// status, only the launcher's own sync_log does).
     pub already_synced: bool,
+    /// True if the user has explicitly hidden this raid (see
+    /// ignored_raids) — e.g. a pug/alt run HeadCount happened to finalize
+    /// that isn't worth syncing.
+    pub is_ignored: bool,
 }
 
 /// Lists raids the SoTRaidLootSync addon has captured (recent ones only —
@@ -353,6 +357,7 @@ pub fn get_captured_raids(app: AppHandle) -> Result<Vec<SyncableRaid>, String> {
 
     let raids = crate::raid_loot_sync::read_captured_raids(Path::new(&game_path))?;
     let log = crate::sync_log::load_sync_log(&app).unwrap_or_default();
+    let ignored_ids = crate::ignored_raids::load_ignored_raids(&app).unwrap_or_default();
 
     let synced_ids: std::collections::HashSet<String> = log
         .iter()
@@ -364,12 +369,20 @@ pub fn get_captured_raids(app: AppHandle) -> Result<Vec<SyncableRaid>, String> {
         .into_iter()
         .map(|r| SyncableRaid {
             already_synced: synced_ids.contains(&r.raid_id),
+            is_ignored: ignored_ids.contains(&r.raid_id),
             raid_id: r.raid_id,
             captured_at: r.captured_at,
             raid_json: r.raid_json,
             loot_json: r.loot_json,
         })
         .collect())
+}
+
+/// Marks (or unmarks) a captured raid as ignored — purely local to this
+/// launcher install, doesn't touch anything on the website.
+#[tauri::command]
+pub fn set_raid_ignored(app: AppHandle, raid_id: String, ignored: bool) -> Result<(), String> {
+    crate::ignored_raids::set_raid_ignored(&app, &raid_id, ignored)
 }
 
 #[derive(serde::Serialize)]

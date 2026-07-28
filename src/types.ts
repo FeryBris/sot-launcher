@@ -315,6 +315,7 @@ export interface SyncableRaid {
   raidJson: string
   lootJson: string | null
   alreadySynced: boolean
+  isIgnored: boolean
 }
 
 /** Parsed from the SoTGuildSync addon's SavedVariables — used unchanged

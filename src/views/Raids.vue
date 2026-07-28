@@ -22,6 +22,8 @@ interface RaidRow {
   syncing: boolean
   syncError: string
   synced: boolean
+  ignoring: boolean
+  ignored: boolean
 }
 
 const rows = ref<RaidRow[]>([])
@@ -65,6 +67,8 @@ async function load() {
         syncing: false,
         syncError: '',
         synced: raid.alreadySynced,
+        ignoring: false,
+        ignored: raid.isIgnored,
       }))
       .filter((row) => isWorthShowing(row.summary))
   } catch (e) {
@@ -90,6 +94,18 @@ async function syncRow(row: RaidRow) {
     row.syncing = false
   }
 }
+
+async function toggleIgnore(row: RaidRow) {
+  row.ignoring = true
+  try {
+    await api.setRaidIgnored(row.raid.raidId, !row.ignored)
+    row.ignored = !row.ignored
+  } catch (e) {
+    row.syncError = String(e)
+  } finally {
+    row.ignoring = false
+  }
+}
 </script>
 
 <template>
@@ -113,11 +129,17 @@ async function syncRow(row: RaidRow) {
     </p>
 
     <div v-else class="raid-list">
-      <div v-for="row in rows" :key="row.raid.raidId" class="raid-card" :class="{ synced: row.synced }">
+      <div
+        v-for="row in rows"
+        :key="row.raid.raidId"
+        class="raid-card"
+        :class="{ synced: row.synced, ignored: row.ignored }"
+      >
         <div class="raid-main">
           <div class="raid-title">
             <span class="zone">{{ row.summary?.zone }}</span>
             <span class="difficulty">{{ row.summary?.difficulty }}</span>
+            <span v-if="row.ignored" class="ignored-badge">Ignored</span>
           </div>
           <div class="raid-meta">
             {{ row.summary?.start }} – {{ row.summary?.end }}
@@ -130,16 +152,26 @@ async function syncRow(row: RaidRow) {
         </div>
 
         <div class="raid-actions">
-          <label class="main-toggle">
-            <input type="checkbox" v-model="row.isMain" :disabled="row.synced || row.syncing" />
-            Main raid
-          </label>
+          <template v-if="!row.ignored">
+            <label class="main-toggle">
+              <input type="checkbox" v-model="row.isMain" :disabled="row.synced || row.syncing" />
+              Main raid
+            </label>
+            <button
+              class="sync-btn"
+              :disabled="row.synced || row.syncing"
+              @click="syncRow(row)"
+            >
+              {{ row.synced ? 'Synced' : row.syncing ? 'Syncing…' : 'Sync Raid' }}
+            </button>
+          </template>
           <button
-            class="sync-btn"
-            :disabled="row.synced || row.syncing"
-            @click="syncRow(row)"
+            v-if="!row.synced"
+            class="ignore-btn"
+            :disabled="row.ignoring"
+            @click="toggleIgnore(row)"
           >
-            {{ row.synced ? 'Synced' : row.syncing ? 'Syncing…' : 'Sync Raid' }}
+            {{ row.ignoring ? 'Working…' : row.ignored ? 'Unignore' : 'Ignore' }}
           </button>
         </div>
       </div>
@@ -217,6 +249,21 @@ h1 {
   opacity: 0.6;
 }
 
+.raid-card.ignored {
+  opacity: 0.5;
+}
+
+.ignored-badge {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 2px 6px;
+}
+
 .raid-title {
   display: flex;
   align-items: baseline;
@@ -285,6 +332,27 @@ h1 {
 }
 
 .sync-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.ignore-btn {
+  background: transparent;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.ignore-btn:hover:not(:disabled) {
+  border-color: var(--accent-dim);
+  color: var(--text);
+}
+
+.ignore-btn:disabled {
   opacity: 0.6;
   cursor: default;
 }

@@ -557,6 +557,21 @@ pub async fn sync_addons(
 
         let (live_version, live_notes, live_deps) = read_live_toc(&addon_dir, &extracted_files).unwrap_or_default();
 
+        // A custom addon is keyed by whatever its .toc Title happens to be,
+        // which often doesn't exactly match the manifest's configured name
+        // for the same addon — so the download above can silently overwrite
+        // a custom addon's files on disk while its OLD state entry (a
+        // different key, same folder) never gets touched by the
+        // `by_name.insert` below. Confirmed live: checking a manifest addon
+        // that collides this way with an existing custom one did nothing
+        // visible, since the stale custom entry just kept showing in the
+        // Custom Addons list. Drop any other entry that now owns an
+        // overlapping folder before inserting the fresh one.
+        let claimed: HashSet<&str> = extracted_files.iter().map(String::as_str).collect();
+        by_name.retain(|name, e| {
+            name == &addon.name || !(e.kind == "custom" && e.files.iter().any(|f| claimed.contains(f.as_str())))
+        });
+
         by_name.insert(
             addon.name.clone(),
             AddonStateEntry {

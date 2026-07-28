@@ -114,6 +114,12 @@ export function syncRaidToWeb(raidId: string, isMain: boolean): Promise<void> {
   return invoke('sync_raid_to_web', { raidId, isMain })
 }
 
+/** Local-only — hides (or restores) a captured raid in the Raids tab,
+ *  e.g. a pug/alt run HeadCount happened to finalize. */
+export function setRaidIgnored(raidId: string, ignored: boolean): Promise<void> {
+  return invoke('set_raid_ignored', { raidId, ignored })
+}
+
 export function getMyLoot(): Promise<MyLootResponse> {
   return invoke('get_my_loot')
 }

@@ -4,12 +4,14 @@ import { PhPlay } from '@phosphor-icons/vue';
 import {
   currentGamePath,
   pendingCount as computePendingCount,
+  pendingUpdateCount as computePendingUpdateCount,
   playNow,
   store,
   syncNow,
 } from '../store';
 
 const pendingCount = computed(computePendingCount);
+const pendingUpdateCount = computed(computePendingUpdateCount);
 
 const canPlay = computed(() => !!currentGamePath() && pendingCount.value === 0 && !store.syncing);
 const canSync = computed(() => !!currentGamePath() && !!store.manifest && !store.syncing);
@@ -31,7 +33,8 @@ function statusLabel() {
   }
   if (store.guildRosterSyncing) return 'Syncing guild roster...';
   if (store.manifestError) return `Guild server error: ${store.manifestError}`;
-  if (pendingCount.value > 0) return `${pendingCount.value} item(s) need updating`;
+  if (pendingUpdateCount.value > 0) return `${pendingUpdateCount.value} item(s) need updating`;
+  if (pendingCount.value > 0) return 'Some addons were unchecked and need to be disabled';
   return 'Up to date';
 }
 </script>
@@ -55,7 +58,7 @@ function statusLabel() {
 
     <div class="actions">
       <button class="sync-btn" :disabled="!canSync" @click="syncNow">
-        {{ pendingCount > 0 ? `Update (${pendingCount})` : 'Sync' }}
+        {{ pendingUpdateCount > 0 ? `Update (${pendingUpdateCount})` : 'Sync' }}
       </button>
       <button class="play-btn" :disabled="!canPlay" @click="play">
         Play

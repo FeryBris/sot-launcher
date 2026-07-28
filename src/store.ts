@@ -459,6 +459,11 @@ export async function syncNow() {
   }
 }
 
+/** Total items a sync would touch — downloads AND addons just waiting to be
+ *  moved to .DisabledAddons after being unchecked. Drives whether Play
+ *  auto-syncs first; not what the "Update (N)" button label should show,
+ *  since "update" is misleading for an addon the user asked to turn off
+ *  (see pendingUpdateCount). */
 export function pendingCount(): number {
   if (!store.manifest || !store.installed) return 0
   let count = 0
@@ -469,6 +474,28 @@ export function pendingCount(): number {
         count++
       }
     } else if (installed && !installed.disabled) {
+      count++
+    }
+  }
+  for (const wtf of store.manifest.wtfFiles) {
+    const hash = store.installed.wtfFiles[wtf.name]
+    if (!hash || hash !== wtf.sha256) {
+      count++
+    }
+  }
+  return count
+}
+
+/** Same as pendingCount, but only items that actually need downloading —
+ *  excludes unchecked addons pending a disable, which aren't an "update"
+ *  even though a sync is still needed to move their files. */
+export function pendingUpdateCount(): number {
+  if (!store.manifest || !store.installed) return 0
+  let count = 0
+  for (const addon of store.manifest.addons) {
+    if (!isAddonWanted(addon)) continue
+    const installed = store.installed.addons[addon.name]
+    if (!installed || installed.disabled || !installed.filesPresent || installed.sha256 !== addon.sha256) {
       count++
     }
   }
