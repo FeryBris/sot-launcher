@@ -97,3 +97,51 @@ jobs:
           releaseBody: 'See the assets below to download this version.'
           releaseDraft: true
           prerelease: false
+
+  # Tauri's bundler has no native pacman target, so rather than compiling a
+  # second time on Arch we just repackage the .deb the `release` job already
+  # built (see packaging/arch/PKGBUILD) — same binary, native package format.
+  build-arch:
+    needs: [release]
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+    steps:
+      # git isn't in the base-devel image (or the base-devel package group),
+      # so it has to go in before actions/checkout can do its thing.
+      - name: Install dependencies
+        run: pacman -Syu --noconfirm --needed git nodejs github-cli
+
+      - uses: actions/checkout@v5
+
+      - name: Resolve release tag
+        id: ver
+        run: |
+          VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=app-v$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Download the .deb built for this release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download "${{ steps.ver.outputs.tag }}" \
+            --repo "$GITHUB_REPOSITORY" --pattern '*.deb' --dir packaging/arch
+
+      - name: Build the Arch package
+        run: |
+          useradd -m builder
+          cd packaging/arch
+          mv ./*.deb sotlauncher.deb
+          sed -i "s/^pkgver=.*/pkgver=${{ steps.ver.outputs.version }}/" PKGBUILD
+          chown -R builder:builder .
+          su builder -c "makepkg -f --nosign"
+
+      - name: Upload package to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ steps.ver.outputs.tag }}" \
+            packaging/arch/*.pkg.tar.zst --repo "$GITHUB_REPOSITORY" --clobber

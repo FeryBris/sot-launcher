@@ -1,0 +1,22 @@
+# Maintainer: SoT
+#
+# This PKGBUILD doesn't compile anything: it repackages the .deb already
+# produced by the ubuntu-22.04 leg of .github/workflows/release.yml into a
+# native pacman package. pkgver is rewritten by CI (see release.yml) to match
+# the release being built; the value below is just a placeholder.
+pkgname=sotlauncher
+pkgver=0.0.0
+pkgrel=1
+pkgdesc="Desktop launcher for the guild: syncs addons/WTF files and launches WoW"
+arch=('x86_64')
+url="https://sot.sk"
+license=('custom')
+depends=('webkit2gtk-4.1' 'gtk3' 'libappindicator-gtk3')
+options=('!strip')
+source=("sotlauncher.deb")
+sha256sums=('SKIP')
+
+package() {
+  ar x "${srcdir}/sotlauncher.deb"
+  tar -xf data.tar.* -C "${pkgdir}"
+}
