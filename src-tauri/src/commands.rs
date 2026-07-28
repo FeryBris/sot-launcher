@@ -22,6 +22,11 @@ pub struct AppState {
     /// `set_game_path_windows`/`set_game_path_linux` can replace it (which
     /// drops and stops the old one) when the watched folder changes.
     pub guild_watcher: std::sync::Mutex<Option<notify::RecommendedWatcher>>,
+    /// True while a background thread is polling for the game process to
+    /// exit (see launch_game/wtf_sync::is_wow_running) — guards against
+    /// stacking up a second poller if Play is clicked again while one's
+    /// already watching.
+    pub game_close_watching: std::sync::atomic::AtomicBool,
 }
 
 impl Default for AppState {
@@ -39,6 +44,7 @@ impl Default for AppState {
                 .unwrap_or_default(),
             tray_primary_item: std::sync::Mutex::new(None),
             guild_watcher: std::sync::Mutex::new(None),
+            game_close_watching: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }
@@ -609,8 +615,10 @@ pub async fn run_sync(
     Ok(CombinedSyncResult { addons, wtf_files })
 }
 
-/// Known WoW executable names, checked case-insensitively.
-const WOW_EXE_NAMES: &[&str] = &["wow.exe", "wowclassic.exe"];
+/// Known WoW executable names, checked case-insensitively. Also used by
+/// wtf_sync::is_wow_running() to guard against syncing the WTF folder
+/// while the client might still be writing to it.
+pub(crate) const WOW_EXE_NAMES: &[&str] = &["wow.exe", "wowclassic.exe"];
 
 /// Looks in `game_root` itself and one level of subfolders (covers both an
 /// exe directly in the selected folder and the modern `_retail_`/`_classic_`/
@@ -688,6 +696,13 @@ pub fn launch_game(app: AppHandle) -> Result<(), String> {
         if let Some(window) = app.get_webview_window("main") {
             let _ = window.hide();
         }
+    }
+
+    // Only bother watching if there's actually something to do once the
+    // game closes — no point polling in the background for a feature the
+    // player hasn't opted into.
+    if s.wtf_sync_auto_push && s.wtf_sync_account.is_some() && s.discord_token.as_deref().is_some_and(|t| !t.is_empty()) {
+        crate::wtf_sync::watch_for_game_close(app);
     }
     Ok(())
 }
@@ -804,4 +819,181 @@ pub fn list_lutris_games() -> Result<Vec<crate::types::LutrisGame>, String> {
             runner: g.runner,
         })
         .collect())
+}
+
+/// Every `WTF/Account/*` subfolder, for the Settings picker — a single WoW
+/// install can have several, so the player picks theirs explicitly.
+#[tauri::command]
+pub fn get_wtf_accounts(app: AppHandle) -> Result<Vec<String>, String> {
+    let s = settings::load_settings(&app)?;
+    let game_path = s.game_path().ok_or_else(|| "no game folder configured".to_string())?;
+    Ok(crate::wtf_sync::list_wtf_accounts(&game_path))
+}
+
+/// Switching accounts invalidates the last-synced bookkeeping — it was
+/// computed against the previous folder's contents and would otherwise
+/// cause a false "no local changes" or "no remote changes" read on the
+/// new one.
+#[tauri::command]
+pub fn set_wtf_sync_account(app: AppHandle, account: Option<String>) -> Result<Settings, String> {
+    let mut s = settings::load_settings(&app)?;
+    s.wtf_sync_account = account.filter(|a| !a.is_empty());
+    s.wtf_last_synced_fingerprint = None;
+    s.wtf_last_known_remote_updated_at = None;
+    s.wtf_last_synced_at = None;
+    settings::save_settings(&app, &s)?;
+    Ok(s)
+}
+
+#[tauri::command]
+pub fn set_wtf_sync_auto_pull(app: AppHandle, enabled: bool) -> Result<Settings, String> {
+    let mut s = settings::load_settings(&app)?;
+    s.wtf_sync_auto_pull = enabled;
+    settings::save_settings(&app, &s)?;
+    Ok(s)
+}
+
+#[tauri::command]
+pub fn set_wtf_sync_auto_push(app: AppHandle, enabled: bool) -> Result<Settings, String> {
+    let mut s = settings::load_settings(&app)?;
+    s.wtf_sync_auto_push = enabled;
+    settings::save_settings(&app, &s)?;
+    Ok(s)
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WtfSyncInfo {
+    pub status: crate::types::WtfSyncStatus,
+    /// Whether the local account folder has changed since the last
+    /// successful push or pull — drives the Settings UI's "you have
+    /// unsynced local changes" hint, independent of any actual push/pull
+    /// attempt (which does its own check server-side-aware of the remote too).
+    pub local_changed: bool,
+}
+
+/// Cloud status + local-change check, for the Settings panel to show
+/// "up to date" / "local changes pending" / "cloud has newer changes"
+/// without actually pushing or pulling anything.
+#[tauri::command]
+pub async fn get_wtf_sync_info(app: AppHandle, state: State<'_, AppState>) -> Result<WtfSyncInfo, String> {
+    let s = settings::load_settings(&app)?;
+    let token = s
+        .discord_token
+        .as_deref()
+        .filter(|t| !t.is_empty())
+        .ok_or_else(|| "sign in with Discord first".to_string())?;
+
+    let status = crate::wtf_sync::fetch_wtf_status(&state.http, token).await?;
+
+    let local_changed = match (s.game_path(), s.wtf_sync_account.as_deref()) {
+        (Some(game_path), Some(account)) => crate::wtf_sync::account_dir(&game_path, account)
+            .ok()
+            .and_then(|dir| crate::wtf_sync::fingerprint_account(&dir).ok())
+            .map(|fp| Some(fp) != s.wtf_last_synced_fingerprint)
+            .unwrap_or(false),
+        _ => false,
+    };
+
+    Ok(WtfSyncInfo { status, local_changed })
+}
+
+/// Zips the selected WTF account folder and uploads it, overwriting
+/// whatever this player previously had stored. Refuses (naming why) unless
+/// `force` is set if the cloud copy changed since this device last touched
+/// it — see wtf_sync.rs's module doc for the conflict model.
+#[tauri::command]
+pub async fn wtf_push(app: AppHandle, state: State<'_, AppState>, force: bool) -> Result<Settings, String> {
+    let mut s = settings::load_settings(&app)?;
+    let game_path = s.game_path().ok_or_else(|| "no game folder configured".to_string())?;
+    let account = s
+        .wtf_sync_account
+        .clone()
+        .ok_or_else(|| "pick your WTF account folder in Settings first".to_string())?;
+    let token = s
+        .discord_token
+        .clone()
+        .filter(|t| !t.is_empty())
+        .ok_or_else(|| "sign in with Discord first".to_string())?;
+
+    if crate::wtf_sync::is_wow_running() {
+        return Err("close World of Warcraft before syncing your WTF folder".to_string());
+    }
+
+    let dir = crate::wtf_sync::account_dir(&game_path, &account)?;
+
+    if !force {
+        let remote = crate::wtf_sync::fetch_wtf_status(&state.http, &token).await?;
+        if remote.exists && remote.updated_at != s.wtf_last_known_remote_updated_at {
+            return Err(
+                "Your cloud WTF backup has changed since this device last synced it - pushing now will overwrite it."
+                    .to_string(),
+            );
+        }
+    }
+
+    let zip = crate::wtf_sync::zip_account(&dir)?;
+    let fingerprint = crate::wtf_sync::fingerprint_account(&dir)?;
+    let status = crate::wtf_sync::upload_wtf_zip(&state.http, &token, zip).await?;
+
+    s.wtf_last_synced_fingerprint = Some(fingerprint);
+    s.wtf_last_known_remote_updated_at = status.updated_at;
+    s.wtf_last_synced_at = Some(crate::sync_log::now_ms());
+    settings::save_settings(&app, &s)?;
+    Ok(s)
+}
+
+/// Downloads this player's cloud WTF backup and replaces the selected
+/// account folder's contents with it. Refuses (naming why) unless `force`
+/// is set if the local folder changed since this device last synced —
+/// see wtf_sync.rs's module doc for the conflict model.
+#[tauri::command]
+pub async fn wtf_pull(app: AppHandle, state: State<'_, AppState>, force: bool) -> Result<Settings, String> {
+    let mut s = settings::load_settings(&app)?;
+    let game_path = s.game_path().ok_or_else(|| "no game folder configured".to_string())?;
+    let account = s
+        .wtf_sync_account
+        .clone()
+        .ok_or_else(|| "pick your WTF account folder in Settings first".to_string())?;
+    let token = s
+        .discord_token
+        .clone()
+        .filter(|t| !t.is_empty())
+        .ok_or_else(|| "sign in with Discord first".to_string())?;
+
+    if crate::wtf_sync::is_wow_running() {
+        return Err("close World of Warcraft before syncing your WTF folder".to_string());
+    }
+
+    let dir = crate::wtf_sync::account_dir(&game_path, &account)?;
+
+    if !force {
+        let current_fp = crate::wtf_sync::fingerprint_account(&dir)?;
+        let has_local_changes = match &s.wtf_last_synced_fingerprint {
+            Some(known) => &current_fp != known,
+            None => crate::wtf_sync::has_any_synced_files(&dir)?,
+        };
+        if has_local_changes {
+            let message = if s.wtf_last_synced_fingerprint.is_none() {
+                "This device has never synced this WTF folder before - pulling now will overwrite its current \
+                 contents with the cloud copy."
+            } else {
+                "You have local WTF changes that haven't been pushed yet - pulling now will overwrite them with \
+                 the cloud copy."
+            };
+            return Err(message.to_string());
+        }
+    }
+
+    let zip = crate::wtf_sync::download_wtf_zip(&state.http, &token).await?;
+    crate::wtf_sync::extract_account_zip(&zip, &dir)?;
+
+    let fingerprint = crate::wtf_sync::fingerprint_account(&dir)?;
+    let status = crate::wtf_sync::fetch_wtf_status(&state.http, &token).await?;
+
+    s.wtf_last_synced_fingerprint = Some(fingerprint);
+    s.wtf_last_known_remote_updated_at = status.updated_at;
+    s.wtf_last_synced_at = Some(crate::sync_log::now_ms());
+    settings::save_settings(&app, &s)?;
+    Ok(s)
 }

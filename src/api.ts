@@ -13,6 +13,7 @@ import type {
   SyncableRaid,
   SyncLogEntry,
   SyncProgress,
+  WtfSyncInfo,
 } from './types'
 
 export function getSettings(): Promise<Settings> {
@@ -179,6 +180,46 @@ export function onDiscordPaired(handler: (s: Settings) => void): Promise<Unliste
 
 export function onDiscordPairError(handler: (message: string) => void): Promise<UnlistenFn> {
   return listen<string>('discord-pair-error', (event) => handler(event.payload))
+}
+
+/** Every WTF/Account/* subfolder — for the Settings account picker. */
+export function getWtfAccounts(): Promise<string[]> {
+  return invoke('get_wtf_accounts')
+}
+
+export function setWtfSyncAccount(account: string | null): Promise<Settings> {
+  return invoke('set_wtf_sync_account', { account })
+}
+
+export function setWtfSyncAutoPull(enabled: boolean): Promise<Settings> {
+  return invoke('set_wtf_sync_auto_pull', { enabled })
+}
+
+export function setWtfSyncAutoPush(enabled: boolean): Promise<Settings> {
+  return invoke('set_wtf_sync_auto_push', { enabled })
+}
+
+/** Cloud status + local-change check, without pushing or pulling anything. */
+export function getWtfSyncInfo(): Promise<WtfSyncInfo> {
+  return invoke('get_wtf_sync_info')
+}
+
+/** `force: true` overwrites the cloud copy even if it changed since this
+ *  device last synced it — only pass it after the user has confirmed. */
+export function wtfPush(force: boolean): Promise<Settings> {
+  return invoke('wtf_push', { force })
+}
+
+/** `force: true` overwrites local changes even if they haven't been
+ *  pushed yet — only pass it after the user has confirmed. */
+export function wtfPull(force: boolean): Promise<Settings> {
+  return invoke('wtf_pull', { force })
+}
+
+/** Fires once the game process is seen to exit, if wtfSyncAutoPush was on
+ *  when it launched (see src-tauri/src/wtf_sync.rs::watch_for_game_close). */
+export function onGameClosed(handler: () => void): Promise<UnlistenFn> {
+  return listen('game-closed', () => handler())
 }
 
 /** Relabels the tray menu's first item ("Play" <-> "Update"). */

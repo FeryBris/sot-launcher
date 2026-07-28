@@ -24,6 +24,19 @@ pub struct WtfEntry {
     pub target_path: String,
 }
 
+/// The cloud copy's state for the paired user's personal WTF backup —
+/// distinct from WtfEntry/manifest wtf_files, which are guild-wide,
+/// admin-managed template files pushed one-directionally to everyone.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct WtfSyncStatus {
+    pub exists: bool,
+    #[serde(default)]
+    pub updated_at: Option<i64>,
+    #[serde(default)]
+    pub size: Option<i64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewsItem {
@@ -91,6 +104,29 @@ pub struct Settings {
     /// last pairing exchange — gates the Raids tab/Sync Raid action.
     #[serde(default)]
     pub is_officer: bool,
+    /// Which WTF/Account/<name> folder is "yours" — a single WoW install
+    /// can have several (shared PC, multiple accounts), so this can't be
+    /// inferred automatically the way game_path can.
+    #[serde(default)]
+    pub wtf_sync_account: Option<String>,
+    #[serde(default)]
+    pub wtf_sync_auto_pull: bool,
+    #[serde(default)]
+    pub wtf_sync_auto_push: bool,
+    /// Fingerprint (see wtf_sync::fingerprint_account) of the local account
+    /// folder as of the last successful push or pull — compared against the
+    /// current fingerprint to detect local changes made since, so a pull
+    /// can warn before silently discarding them.
+    #[serde(default)]
+    pub wtf_last_synced_fingerprint: Option<String>,
+    /// The cloud copy's updatedAt as of the last successful push or pull —
+    /// compared against a fresh status check to detect another device
+    /// having pushed since, so a push can warn before silently overwriting it.
+    #[serde(default)]
+    pub wtf_last_known_remote_updated_at: Option<i64>,
+    /// Wall-clock ms of the last successful push or pull, for display only.
+    #[serde(default)]
+    pub wtf_last_synced_at: Option<i64>,
 }
 
 fn default_true() -> bool {

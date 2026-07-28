@@ -9,6 +9,7 @@ mod sync;
 mod sync_log;
 mod types;
 mod watcher;
+mod wtf_sync;
 
 use commands::AppState;
 use tauri::menu::{Menu, MenuItem};
@@ -177,6 +178,13 @@ pub fn run() {
       commands::sync_raid_to_web,
       commands::set_raid_ignored,
       commands::get_my_loot,
+      commands::get_wtf_accounts,
+      commands::set_wtf_sync_account,
+      commands::set_wtf_sync_auto_pull,
+      commands::set_wtf_sync_auto_push,
+      commands::get_wtf_sync_info,
+      commands::wtf_push,
+      commands::wtf_pull,
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

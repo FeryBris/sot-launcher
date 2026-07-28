@@ -42,6 +42,29 @@ export interface Settings {
   discordAvatar: string | null
   /** Whether the paired Discord user holds officer guild rank, as of the last pairing exchange. */
   isOfficer: boolean
+  /** Which WTF/Account/<name> folder is "yours" — a WoW install can have
+   *  several (shared PC, multiple accounts), so this can't be inferred
+   *  automatically the way the game folder itself can. */
+  wtfSyncAccount: string | null
+  wtfSyncAutoPull: boolean
+  wtfSyncAutoPush: boolean
+  /** ms epoch of the last successful push or pull, for display only. */
+  wtfLastSyncedAt: number | null
+}
+
+/** The paired user's personal WTF cloud backup state — distinct from
+ *  Manifest.wtfFiles, which are guild-wide admin-managed template files
+ *  pushed one-directionally to everyone. */
+export interface WtfSyncStatus {
+  exists: boolean
+  updatedAt: number | null
+  size: number | null
+}
+
+export interface WtfSyncInfo {
+  status: WtfSyncStatus
+  /** Whether the local account folder has changed since the last successful push/pull. */
+  localChanged: boolean
 }
 
 export interface AddonStateEntry {

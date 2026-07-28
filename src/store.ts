@@ -10,6 +10,7 @@ import type {
   MyLootResponse,
   Settings,
   SyncProgress,
+  WtfSyncInfo,
 } from './types'
 
 export interface ConfirmRequest {
@@ -51,6 +52,11 @@ interface Store {
   myLoot: MyLootResponse | null
   myLootLoading: boolean
   myLootError: string
+  /** WTF/Account/* subfolders available to pick from in Settings. */
+  wtfAccounts: string[]
+  wtfSyncInfo: WtfSyncInfo | null
+  wtfSyncing: boolean
+  wtfSyncError: string
 }
 
 export const store = reactive<Store>({
@@ -66,6 +72,10 @@ export const store = reactive<Store>({
     discordUsername: null,
     discordAvatar: null,
     isOfficer: false,
+    wtfSyncAccount: null,
+    wtfSyncAutoPull: false,
+    wtfSyncAutoPush: false,
+    wtfLastSyncedAt: null,
   },
   apiBaseUrl: '',
   manifest: null,
@@ -89,6 +99,10 @@ export const store = reactive<Store>({
   myLoot: null,
   myLootLoading: false,
   myLootError: '',
+  wtfAccounts: [],
+  wtfSyncInfo: null,
+  wtfSyncing: false,
+  wtfSyncError: '',
 })
 
 /** Active confirm-dialog request, rendered by <ConfirmDialog> mounted once at the app root. */
@@ -115,6 +129,7 @@ let progressUnlisten: (() => void) | null = null
 let discordPairedUnlisten: (() => void) | null = null
 let discordPairErrorUnlisten: (() => void) | null = null
 let guildDataChangedUnlisten: (() => void) | null = null
+let gameClosedUnlisten: (() => void) | null = null
 
 const AUTO_SYNC_DEBOUNCE_MS = 60_000
 let lastAutoSyncSnapshot = ''
@@ -191,12 +206,32 @@ export async function init() {
     void refreshGuildRoster().then(() => maybeAutoSyncGuildRoster())
   })
 
+  // The game itself can only ever be running on one device at a time, so
+  // "it just closed" is as good a signal as any that this device's WTF
+  // folder may have just changed and is worth pushing, if the player
+  // opted in (see wtf_sync.rs::watch_for_game_close - only armed at all
+  // when wtfSyncAutoPush is on).
+  gameClosedUnlisten = await api.onGameClosed(() => {
+    if (store.settings.wtfSyncAutoPush) {
+      void wtfPushWithConfirm()
+    }
+  })
+
   await refreshManifest()
   await refreshGuildSyncData()
   void maybeAutoSyncGuildData()
   await refreshGuildRoster()
   void maybeAutoSyncGuildRoster()
   void refreshMyLoot()
+  void refreshWtfAccounts()
+  void refreshWtfSyncInfo()
+
+  // Mirrors the game-close trigger: launcher open is the other natural
+  // moment to reconcile a device's settings against the cloud, before the
+  // player starts playing on it.
+  if (store.settings.wtfSyncAutoPull && store.settings.wtfSyncAccount && store.settings.discordToken) {
+    void wtfPullWithConfirm()
+  }
 }
 
 /** Fetches the signed-in user's own loot, grouped by raid — not polled,
@@ -318,6 +353,133 @@ export async function signOutDiscord() {
   }
 }
 
+/** Every WTF/Account/* subfolder available under the current game folder. */
+export async function refreshWtfAccounts() {
+  if (!currentGamePath()) {
+    store.wtfAccounts = []
+    return
+  }
+  try {
+    store.wtfAccounts = await api.getWtfAccounts()
+  } catch {
+    store.wtfAccounts = []
+  }
+}
+
+/** Cloud status + local-change check, without pushing or pulling anything. */
+export async function refreshWtfSyncInfo() {
+  if (!store.settings.discordToken) {
+    store.wtfSyncInfo = null
+    return
+  }
+  try {
+    store.wtfSyncInfo = await api.getWtfSyncInfo()
+  } catch (e) {
+    store.wtfSyncError = String(e)
+  }
+}
+
+export async function saveWtfSyncAccount(account: string | null) {
+  store.settings = await api.setWtfSyncAccount(account)
+  await refreshWtfSyncInfo()
+}
+
+export async function saveWtfSyncAutoPull(enabled: boolean) {
+  store.settings = await api.setWtfSyncAutoPull(enabled)
+}
+
+export async function saveWtfSyncAutoPush(enabled: boolean) {
+  store.settings = await api.setWtfSyncAutoPush(enabled)
+}
+
+/** Pushes the local WTF folder to the cloud. Rejects with a human-readable
+ *  reason (not a generic Error) if `force` is false and the cloud copy
+ *  changed since this device last synced it - see confirmWtfPush/
+ *  wtfPushWithConfirm for the confirm-and-retry dance callers should use
+ *  instead of calling this directly. */
+export async function wtfPushNow(force = false) {
+  store.wtfSyncing = true
+  store.wtfSyncError = ''
+  try {
+    store.settings = await api.wtfPush(force)
+    await refreshWtfSyncInfo()
+  } catch (e) {
+    store.wtfSyncError = String(e)
+    throw e
+  } finally {
+    store.wtfSyncing = false
+  }
+}
+
+/** Pulls the cloud WTF backup down, replacing the local account folder's
+ *  contents. Same force/confirm shape as wtfPushNow - see wtfPullWithConfirm. */
+export async function wtfPullNow(force = false) {
+  store.wtfSyncing = true
+  store.wtfSyncError = ''
+  try {
+    store.settings = await api.wtfPull(force)
+    await refreshWtfSyncInfo()
+  } catch (e) {
+    store.wtfSyncError = String(e)
+    throw e
+  } finally {
+    store.wtfSyncing = false
+  }
+}
+
+/** One themed confirm dialog for a push that would overwrite newer cloud changes. */
+export function confirmWtfPush(reason: string): Promise<boolean> {
+  return requestConfirm({
+    title: 'Sync WTF folder',
+    message: `${reason}\n\nContinue anyway?`,
+    confirmLabel: 'Push anyway',
+    danger: true,
+  })
+}
+
+/** One themed confirm dialog for a pull that would overwrite unsynced local changes. */
+export function confirmWtfPull(reason: string): Promise<boolean> {
+  return requestConfirm({
+    title: 'Sync WTF folder',
+    message: `${reason}\n\nContinue anyway?`,
+    confirmLabel: 'Pull anyway',
+    danger: true,
+  })
+}
+
+/** Every conflict wtf_push/wtf_pull refuse over (see commands.rs) mentions
+ *  "will overwrite" - other failures (not signed in, game still running,
+ *  no account picked) aren't fixed by retrying with force, so those are
+ *  just surfaced as a plain error instead of the confirm-and-retry dialog. */
+function isWtfOverwriteConflict(reason: string): boolean {
+  return reason.includes('will overwrite')
+}
+
+/** Push with the confirm-and-retry dance wired in - shared by the manual
+ *  Settings button and the auto-push-on-game-close trigger, so an
+ *  automatic sync still surfaces the same warning a manual one would
+ *  rather than silently choosing a side. */
+export async function wtfPushWithConfirm() {
+  try {
+    await wtfPushNow()
+  } catch (e) {
+    if (isWtfOverwriteConflict(String(e)) && (await confirmWtfPush(String(e)))) {
+      await wtfPushNow(true)
+    }
+  }
+}
+
+/** Same shape as wtfPushWithConfirm, for pull. */
+export async function wtfPullWithConfirm() {
+  try {
+    await wtfPullNow()
+  } catch (e) {
+    if (isWtfOverwriteConflict(String(e)) && (await confirmWtfPull(String(e)))) {
+      await wtfPullNow(true)
+    }
+  }
+}
+
 export async function refreshManifest() {
   store.loadingManifest = true
   store.manifestError = ''
@@ -348,6 +510,7 @@ export async function saveGamePath(path: string, platform: 'windows' | 'linux') 
   store.settings = platform === 'windows' ? await api.setGamePathWindows(path) : await api.setGamePathLinux(path)
   await refreshInstalledState()
   await refreshGuildSyncData()
+  await refreshWtfAccounts()
 }
 
 export async function saveLaunchCommand(command: string) {
@@ -565,4 +728,5 @@ export function disposeStore() {
   discordPairedUnlisten?.()
   discordPairErrorUnlisten?.()
   guildDataChangedUnlisten?.()
+  gameClosedUnlisten?.()
 }
