@@ -103,6 +103,11 @@ jobs:
   # built (see packaging/arch/PKGBUILD) — same binary, native package format.
   build-arch:
     needs: [release]
+    # Default success() also checks check-version (release's own need),
+    # which is skipped on anything but a main-branch push — and that skip
+    # propagates down. release survives it via its own always() below;
+    # mirror that here or this job gets skipped right along with it.
+    if: always() && needs.release.result == 'success'
     permissions:
       contents: write
     runs-on: ubuntu-latest
