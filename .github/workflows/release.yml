@@ -98,6 +98,57 @@ jobs:
           releaseDraft: true
           prerelease: false
 
+      # linuxdeploy freezes libwayland-client/cursor/egl into the AppImage
+      # at this Ubuntu version's copy, which goes stale against newer host
+      # Mesa builds — confirmed on a Steam Deck: libEGL_mesa.so.0 aborting
+      # with "undefined symbol: wl_display_create_queue_with_name" because
+      # the bundled libwayland-client predates that symbol. Deleting those
+      # three libs from the AppImage forces it to dynamically load the
+      # host's own copies instead, which by construction always match that
+      # host's Mesa (same fix PCSX2 shipped for the identical bug: see
+      # https://github.com/PCSX2/pcsx2/commit/0b12d82). This changes the
+      # AppImage's bytes, so its updater .sig (and the .tar.gz wrapper
+      # tauri-action already uploaded above) have to be regenerated too.
+      - name: Strip bundled Wayland libs from the AppImage and re-sign
+        if: matrix.platform == 'ubuntu-22.04'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          APPIMAGETOOL="$PWD/appimagetool.AppImage"
+          curl -Lo "$APPIMAGETOOL" \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x "$APPIMAGETOOL"
+
+          BUNDLE_DIR="src-tauri/target/release/bundle/appimage"
+          MATCHES=$(find "$BUNDLE_DIR" -maxdepth 1 -name 'SoTLauncher_*_amd64.AppImage')
+          if [ -z "$MATCHES" ] || [ "$(wc -l <<< "$MATCHES")" -ne 1 ]; then
+            echo "expected exactly one AppImage, found: $MATCHES" >&2
+            exit 1
+          fi
+          NAME=$(basename "$MATCHES")
+
+          cd "$BUNDLE_DIR"
+          chmod +x "$NAME"
+          ./"$NAME" --appimage-extract >/dev/null
+          rm -f squashfs-root/usr/lib/libwayland-client.so* \
+                squashfs-root/usr/lib/libwayland-cursor.so* \
+                squashfs-root/usr/lib/libwayland-egl.so*
+          rm -f "$NAME"
+          ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 "$APPIMAGETOOL" squashfs-root "$NAME"
+          rm -rf squashfs-root
+
+          "$GITHUB_WORKSPACE/node_modules/.bin/tauri" signer sign "$NAME"
+
+          TARBALL="$NAME.tar.gz"
+          tar -czf "$TARBALL" "$NAME"
+          "$GITHUB_WORKSPACE/node_modules/.bin/tauri" signer sign "$TARBALL"
+
+          VERSION=$(node -p "require('$GITHUB_WORKSPACE/src-tauri/tauri.conf.json').version")
+          gh release upload "app-v$VERSION" "$NAME" "$NAME.sig" "$TARBALL" "$TARBALL.sig" \
+            --repo "$GITHUB_REPOSITORY" --clobber
+
   # Actual steps live in build-arch.yml, which is also directly dispatchable
   # on its own (no Windows/Linux rebuild) against any existing release.
   build-arch:
