@@ -38,9 +38,7 @@ pub fn find_saved_variables_file(game_path: &Path, file_name: &str) -> Option<Pa
 /// SavedVariables file and un-escapes it. This is not a general Lua
 /// parser — it only understands the one shape every field these addons
 /// write uses (`SavedVarsTable = { ["field"] = "<escaped JSON>" }`), which
-/// is deliberately simple enough not to need one. SoTGuildSync writes both
-/// `json` (per-character data) and `rosterJson` (the whole guild roster)
-/// into the same file under different field names.
+/// is deliberately simple enough not to need one.
 pub fn extract_json_string(raw: &str, field: &str) -> Option<String> {
     let marker = format!("[\"{field}\"] = \"");
     let start = raw.find(&marker)? + marker.len();
@@ -73,13 +71,13 @@ pub fn extract_json_string(raw: &str, field: &str) -> Option<String> {
 /// an empty list if the addon hasn't written anything yet, rather than an
 /// error — that's the normal "never logged in as a guild member" case.
 pub fn read_guild_sync_data(game_path: &Path) -> Result<Vec<GuildSyncData>, String> {
-    let Some(path) = find_saved_variables_file(game_path, "SoTGuildSync.lua") else {
+    let Some(path) = find_saved_variables_file(game_path, "SoTCharacterSync.lua") else {
         return Ok(Vec::new());
     };
 
     let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    // The file can exist (SoTGuildSyncDB = SoTGuildSyncDB or {} always
-    // runs on load) without `json` ever having been written yet — e.g.
+    // The file can exist (SoTCharacterSyncDB = SoTCharacterSyncDB or {}
+    // always runs on load) without `json` ever having been written yet — e.g.
     // guild membership was never confirmed true during this session. That's
     // the same "nothing to report yet" case as the file not existing at
     // all, not a real parse error.

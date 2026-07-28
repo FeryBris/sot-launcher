@@ -135,17 +135,26 @@ pub struct AddonStateEntry {
     pub sha256: Option<String>,
     #[serde(default)]
     pub notes: String,
-    /// Top-level folder(s) this addon owns, under Interface/AddOns when
-    /// enabled or Interface/.DisabledAddons when disabled.
+    /// Top-level folder(s) this addon owns, under Interface/AddOns,
+    /// Interface/.DisabledAddons, or Interface/.DeletedAddons depending on
+    /// disabled/deleted below.
     #[serde(default)]
     pub files: Vec<String>,
     /// False if any folder in `files` is actually missing from its expected location.
     #[serde(default)]
     pub files_present: bool,
     /// True if this addon's folders currently live in Interface/.DisabledAddons
-    /// instead of Interface/AddOns.
+    /// instead of Interface/AddOns. Always false once `deleted` is true —
+    /// disabled and deleted are two different locations, never both at once.
     #[serde(default)]
     pub disabled: bool,
+    /// True if this addon's folders currently live in Interface/.DeletedAddons
+    /// (soft-deleted — recoverable via Restore, or purged via Delete Forever).
+    /// A separate flag from `disabled` (rather than folding it into one
+    /// enum) so existing .sotlauncher.json files from before this field
+    /// existed keep working unchanged — everything just defaults to false.
+    #[serde(default)]
+    pub deleted: bool,
     /// Folder names of other addons this one requires to function, read from
     /// its .toc `## Dependencies:`/`## RequiredDeps:` line. Used to warn
     /// before disabling/deleting something another installed addon needs.
@@ -478,7 +487,7 @@ pub struct SyncLogEntry {
     pub raid_id: Option<String>,
 }
 
-/// Parsed straight from the SoTGuildSync addon's SavedVariables JSON blob.
+/// Parsed straight from the SoTCharacterSync addon's SavedVariables JSON blob.
 /// Used unchanged both to display in the launcher and as the sync-to-web
 /// payload — see `guild_sync::read_guild_sync_data`.
 #[derive(Debug, Clone, Serialize, Deserialize)]

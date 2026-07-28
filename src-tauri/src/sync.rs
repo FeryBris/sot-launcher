@@ -9,6 +9,7 @@ use tauri::{AppHandle, Emitter};
 const EVENT: &str = "sync-progress";
 const STATE_FILENAME: &str = ".sotlauncher.json";
 const DISABLED_DIR_NAME: &str = ".DisabledAddons";
+const DELETED_DIR_NAME: &str = ".DeletedAddons";
 
 fn addon_dir_for(game_path: &str) -> PathBuf {
     PathBuf::from(game_path).join("Interface").join("AddOns")
@@ -16,6 +17,26 @@ fn addon_dir_for(game_path: &str) -> PathBuf {
 
 fn disabled_dir_for(game_path: &str) -> PathBuf {
     PathBuf::from(game_path).join("Interface").join(DISABLED_DIR_NAME)
+}
+
+fn deleted_dir_for(game_path: &str) -> PathBuf {
+    PathBuf::from(game_path).join("Interface").join(DELETED_DIR_NAME)
+}
+
+/// Which of the three folders an entry's files actually live in right now.
+fn location_dir_for<'a>(
+    entry: &AddonStateEntry,
+    addon_dir: &'a Path,
+    disabled_dir: &'a Path,
+    deleted_dir: &'a Path,
+) -> &'a Path {
+    if entry.deleted {
+        deleted_dir
+    } else if entry.disabled {
+        disabled_dir
+    } else {
+        addon_dir
+    }
 }
 
 fn emit_progress(
@@ -59,12 +80,11 @@ fn safe_join(base: &Path, rel: &str) -> Result<PathBuf, String> {
     Ok(result)
 }
 
-// No timeout at all (reqwest::get()'s implicit default) means a connection
-// that stalls instead of failing outright — observed on Windows, where a
-// download can hang indefinitely with the sync stuck on "downloading" and
-// no error ever surfacing — hangs forever instead of erroring, leaving
-// the UI stuck showing "downloading" with no way to know anything's
-// wrong. A generous but finite timeout turns that into a clear error.
+// No timeout at all (reqwest::get()'s implicit default) lets a stalled
+// connection hang forever instead of erroring — observed on Windows, where
+// a download would leave the sync stuck on "downloading" with no way to
+// know anything's wrong. A generous but finite timeout turns that into a
+// clear error.
 const DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 async fn download_to_file(url: &str, dest: &Path) -> Result<(), String> {
@@ -124,6 +144,28 @@ fn extract_zip(zip_path: &Path, dest_dir: &Path) -> Result<Vec<String>, String> 
             }
             let mut outfile = std::fs::File::create(&outpath).map_err(|e| e.to_string())?;
             std::io::copy(&mut entry, &mut outfile).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(top_level.into_iter().collect())
+}
+
+/// Peeks a zip's top-level entry names without writing anything, so a
+/// caller can check for folder collisions before committing to extract —
+/// see its use in sync_addons for why that ordering matters.
+fn list_zip_top_level(zip_path: &Path) -> Result<Vec<String>, String> {
+    let file = std::fs::File::open(zip_path).map_err(|e| e.to_string())?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
+    let mut top_level: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+
+    for i in 0..archive.len() {
+        let entry = archive.by_index(i).map_err(|e| e.to_string())?;
+        let Some(name) = entry.enclosed_name() else {
+            continue;
+        };
+        if let Some(Component::Normal(first)) = name.components().next() {
+            if let Some(s) = first.to_str() {
+                top_level.insert(s.to_string());
+            }
         }
     }
     Ok(top_level.into_iter().collect())
@@ -322,6 +364,7 @@ fn scan_custom_addons(addon_dir: &Path, claimed_folders: &HashSet<String>) -> Ve
             files: vec![folder],
             files_present: true,
             disabled: false,
+            deleted: false,
             dependencies,
         });
     }
@@ -331,13 +374,14 @@ fn scan_custom_addons(addon_dir: &Path, claimed_folders: &HashSet<String>) -> Ve
 
 /// Computes current state for everything in `manifest` by reading
 /// `Interface/AddOns/.sotlauncher.json`, re-checking file presence in
-/// whichever of AddOns/.DisabledAddons each entry currently lives in,
-/// re-reading each addon's live .toc info, refreshing type/apiVersion/sha256
-/// against the current manifest, discovering any new custom addons, and
-/// rewriting the file with the result.
+/// whichever of AddOns/.DisabledAddons/.DeletedAddons each entry currently
+/// lives in, re-reading each addon's live .toc info, refreshing
+/// type/apiVersion/sha256 against the current manifest, discovering any new
+/// custom addons, and rewriting the file with the result.
 pub fn get_installed_state(game_path: &str, manifest: &Manifest) -> InstalledState {
     let addon_dir = addon_dir_for(game_path);
     let disabled_dir = disabled_dir_for(game_path);
+    let deleted_dir = deleted_dir_for(game_path);
     let _ = std::fs::create_dir_all(&addon_dir);
 
     let previous = load_addons_state(&addon_dir);
@@ -347,10 +391,14 @@ pub fn get_installed_state(game_path: &str, manifest: &Manifest) -> InstalledSta
     let mut refreshed: Vec<AddonStateEntry> = Vec::new();
 
     for entry in previous.into_iter() {
-        for f in &entry.files {
-            claimed_folders.insert(f.clone());
+        // Deleted entries' folders don't block a fresh custom-addon scan or
+        // a re-download of the same name — only active/disabled ones do.
+        if !entry.deleted {
+            for f in &entry.files {
+                claimed_folders.insert(f.clone());
+            }
         }
-        let base = if entry.disabled { &disabled_dir } else { &addon_dir };
+        let base = location_dir_for(&entry, &addon_dir, &disabled_dir, &deleted_dir);
         let files_present = !entry.files.is_empty() && entry.files.iter().all(|f| base.join(f).exists());
         let live = if files_present { read_live_toc(base, &entry.files) } else { None };
         let (live_version, live_notes, live_deps) = match live {
@@ -378,6 +426,7 @@ pub fn get_installed_state(game_path: &str, manifest: &Manifest) -> InstalledSta
             files: entry.files,
             files_present,
             disabled: entry.disabled,
+            deleted: entry.deleted,
             dependencies: live_deps.unwrap_or(entry.dependencies),
         });
     }
@@ -401,7 +450,8 @@ pub fn get_installed_state(game_path: &str, manifest: &Manifest) -> InstalledSta
 }
 
 /// Moves a tracked addon (managed or custom) between Interface/AddOns and
-/// Interface/.DisabledAddons. Disabling never deletes anything.
+/// Interface/.DisabledAddons. Disabling never deletes anything. Errors on a
+/// deleted entry — restore it from Trash first.
 pub fn set_addon_disabled(game_path: &str, name: &str, disabled: bool) -> Result<(), String> {
     let addon_dir = addon_dir_for(game_path);
     let disabled_dir = disabled_dir_for(game_path);
@@ -411,6 +461,9 @@ pub fn set_addon_disabled(game_path: &str, name: &str, disabled: bool) -> Result
         .find(|e| e.name == name)
         .ok_or_else(|| format!("{name} is not tracked by the launcher"))?;
 
+    if entry.deleted {
+        return Err(format!("{name} is in Trash — restore it first"));
+    }
     if entry.disabled == disabled {
         return Ok(());
     }
@@ -420,22 +473,105 @@ pub fn set_addon_disabled(game_path: &str, name: &str, disabled: bool) -> Result
     save_addons_state(&addon_dir, &entries)
 }
 
-/// Permanently deletes a tracked addon (managed or custom) from wherever it
-/// currently lives and drops it from the state file. Returns the entry that
-/// was removed, if any, so the caller can also clear its enabled/disabled
-/// preference for managed addons.
+/// Soft-deletes a tracked addon (managed or custom): moves its files to
+/// Interface/.DeletedAddons and marks the entry `deleted`, but keeps
+/// tracking it (unlike the old permanent-delete behavior) so Trash can
+/// later Restore it or Delete Forever. Returns the updated entry, if any,
+/// so the caller can also clear its enabled/disabled preference for managed
+/// addons. A no-op returning the entry unchanged if it's already deleted.
 pub fn delete_addon(game_path: &str, name: &str) -> Result<Option<AddonStateEntry>, String> {
     let addon_dir = addon_dir_for(game_path);
     let disabled_dir = disabled_dir_for(game_path);
+    let deleted_dir = deleted_dir_for(game_path);
     let mut entries = load_addons_state(&addon_dir);
     let Some(pos) = entries.iter().position(|e| e.name == name) else {
         return Ok(None);
     };
-    let entry = entries.remove(pos);
-    let base = if entry.disabled { &disabled_dir } else { &addon_dir };
-    remove_addon_files(base, &entry.files);
+
+    if entries[pos].deleted {
+        return Ok(Some(entries[pos].clone()));
+    }
+
+    let from = if entries[pos].disabled { &disabled_dir } else { &addon_dir };
+    move_addon_files(from, &deleted_dir, &entries[pos].files)?;
+    entries[pos].disabled = false;
+    entries[pos].deleted = true;
+
+    let result = entries[pos].clone();
     save_addons_state(&addon_dir, &entries)?;
-    Ok(Some(entry))
+    Ok(Some(result))
+}
+
+/// Permanently destroys a trashed addon's files and drops its tracking
+/// entry entirely — the point of no return Trash exists to delay. Only
+/// acts on an entry that's actually `deleted`; anything else is a no-op.
+pub fn delete_addon_forever(game_path: &str, name: &str) -> Result<(), String> {
+    let addon_dir = addon_dir_for(game_path);
+    let deleted_dir = deleted_dir_for(game_path);
+    let mut entries = load_addons_state(&addon_dir);
+    let Some(pos) = entries.iter().position(|e| e.name == name && e.deleted) else {
+        return Ok(());
+    };
+    let entry = entries.remove(pos);
+    remove_addon_files(&deleted_dir, &entry.files);
+    save_addons_state(&addon_dir, &entries)
+}
+
+/// Moves a trashed addon's files back to Interface/AddOns and clears
+/// `deleted` (always restoring as enabled, not back into .DisabledAddons —
+/// once something's been through Trash, "restore" means "make it work
+/// again"). If a different, non-deleted entry currently owns one of its
+/// folders (e.g. a managed addon re-synced into that name after this one
+/// was trashed), two things can't occupy one folder: with `force: false`
+/// this returns an error naming the occupant instead of restoring, so the
+/// caller can confirm with the user; call again with `force: true` to
+/// permanently delete that occupant first, then restore.
+pub fn restore_addon(game_path: &str, name: &str, force: bool) -> Result<Option<AddonStateEntry>, String> {
+    let addon_dir = addon_dir_for(game_path);
+    let disabled_dir = disabled_dir_for(game_path);
+    let deleted_dir = deleted_dir_for(game_path);
+    let mut entries = load_addons_state(&addon_dir);
+    let Some(pos) = entries.iter().position(|e| e.name == name && e.deleted) else {
+        return Ok(None);
+    };
+
+    let restoring_files: HashSet<String> = entries[pos].files.iter().cloned().collect();
+    let occupant_pos = entries
+        .iter()
+        .position(|e| !e.deleted && e.name != name && e.files.iter().any(|f| restoring_files.contains(f)));
+
+    if let Some(occupant_pos) = occupant_pos {
+        if !force {
+            return Err(format!(
+                "\"{}\" currently occupies that folder — restoring will permanently delete it",
+                entries[occupant_pos].name
+            ));
+        }
+        let occupant = entries.remove(occupant_pos);
+        let occupant_base = if occupant.disabled { &disabled_dir } else { &addon_dir };
+        remove_addon_files(occupant_base, &occupant.files);
+    }
+
+    // Removing the occupant above may have shifted every later index.
+    let pos = entries.iter().position(|e| e.name == name && e.deleted).unwrap();
+
+    move_addon_files(&deleted_dir, &addon_dir, &entries[pos].files)?;
+    entries[pos].disabled = false;
+    entries[pos].deleted = false;
+    entries[pos].files_present = true;
+    if let Some((live_version, live_notes, live_deps)) = read_live_toc(&addon_dir, &entries[pos].files) {
+        if let Some(v) = live_version {
+            entries[pos].version = v;
+        }
+        if let Some(n) = live_notes {
+            entries[pos].notes = n;
+        }
+        entries[pos].dependencies = live_deps;
+    }
+
+    let result = entries[pos].clone();
+    save_addons_state(&addon_dir, &entries)?;
+    Ok(Some(result))
 }
 
 pub async fn sync_addons(
@@ -447,6 +583,7 @@ pub async fn sync_addons(
     let mut result = SyncResult { updated: vec![], skipped: vec![], removed: vec![], failed: vec![] };
     let addon_dir = addon_dir_for(game_path);
     let disabled_dir = disabled_dir_for(game_path);
+    let deleted_dir = deleted_dir_for(game_path);
     let _ = std::fs::create_dir_all(&addon_dir);
 
     let mut by_name: HashMap<String, AddonStateEntry> =
@@ -460,8 +597,9 @@ pub async fn sync_addons(
         let prev = by_name.get(&addon.name).cloned();
 
         if !wanted {
+            // Already sitting in Trash — nothing to disable, leave it alone.
             if let Some(prev) = prev {
-                if !prev.disabled && move_addon_files(&addon_dir, &disabled_dir, &prev.files).is_ok() {
+                if !prev.deleted && !prev.disabled && move_addon_files(&addon_dir, &disabled_dir, &prev.files).is_ok() {
                     let mut updated = prev;
                     updated.disabled = true;
                     by_name.insert(addon.name.clone(), updated);
@@ -474,8 +612,13 @@ pub async fn sync_addons(
 
         // Re-enabling something that was disabled: if the manifest hasn't
         // moved on since it was disabled, just move it back - no re-download.
+        // A trashed entry (deleted) is deliberately NOT handled here — it
+        // falls through to the fresh-download path below instead, same as
+        // if it had never been tracked at all, leaving the actual trashed
+        // copy in .DeletedAddons alone (still restorable/purgeable from
+        // Trash, just no longer the entry this name's map key points at).
         if let Some(prev) = &prev {
-            if prev.disabled {
+            if prev.disabled && !prev.deleted {
                 if prev.sha256.as_deref() == Some(addon.sha256.as_str())
                     && move_addon_files(&disabled_dir, &addon_dir, &prev.files).is_ok()
                 {
@@ -501,6 +644,7 @@ pub async fn sync_addons(
 
         let up_to_date = prev.as_ref().is_some_and(|e| {
             !e.disabled
+                && !e.deleted
                 && !e.files.is_empty()
                 && e.files.iter().all(|f| addon_dir.join(f).exists())
                 && e.sha256.as_deref().map(|h| h.eq_ignore_ascii_case(&addon.sha256)).unwrap_or(false)
@@ -513,7 +657,7 @@ pub async fn sync_addons(
         // Clean up the previous enabled copy's files first, in case the new
         // zip dropped a folder the old one had (otherwise it'd be orphaned).
         if let Some(prev) = &prev {
-            if !prev.disabled {
+            if !prev.disabled && !prev.deleted {
                 remove_addon_files(&addon_dir, &prev.files);
             }
         }
@@ -543,6 +687,40 @@ pub async fn sync_addons(
             }
         }
 
+        // A custom addon is keyed by whatever its .toc Title happens to be,
+        // which often doesn't exactly match the manifest's configured name
+        // for the same addon — so without this check, extracting below
+        // would silently overwrite a custom addon's files on disk while its
+        // OLD state entry (a different key, same folder) never gets touched
+        // by the `by_name.insert` further down. Confirmed live: checking a
+        // manifest addon that collides this way with an existing custom one
+        // did nothing visible, since the stale custom entry just kept
+        // showing in the Custom Addons list while its real files were gone.
+        // Peeking the zip's own folder names BEFORE writing anything lets
+        // any other active, tracked entry that owns one of them get moved
+        // to Trash first, instead of silently destroyed.
+        if let Ok(incoming_names) = list_zip_top_level(&tmp_zip) {
+            let incoming: HashSet<&str> = incoming_names.iter().map(String::as_str).collect();
+            let colliding: Vec<String> = by_name
+                .iter()
+                .filter(|(n, e)| {
+                    n.as_str() != addon.name.as_str()
+                        && !e.disabled
+                        && !e.deleted
+                        && e.files.iter().any(|f| incoming.contains(f.as_str()))
+                })
+                .map(|(n, _)| n.clone())
+                .collect();
+            for n in colliding {
+                if let Some(mut victim) = by_name.get(&n).cloned() {
+                    if move_addon_files(&addon_dir, &deleted_dir, &victim.files).is_ok() {
+                        victim.deleted = true;
+                        by_name.insert(n, victim);
+                    }
+                }
+            }
+        }
+
         emit_progress(app, &addon.name, "extracting", idx + 1, total, None);
         let extracted_files = match extract_zip(&tmp_zip, &addon_dir) {
             Ok(files) => files,
@@ -557,21 +735,6 @@ pub async fn sync_addons(
 
         let (live_version, live_notes, live_deps) = read_live_toc(&addon_dir, &extracted_files).unwrap_or_default();
 
-        // A custom addon is keyed by whatever its .toc Title happens to be,
-        // which often doesn't exactly match the manifest's configured name
-        // for the same addon — so the download above can silently overwrite
-        // a custom addon's files on disk while its OLD state entry (a
-        // different key, same folder) never gets touched by the
-        // `by_name.insert` below. Confirmed live: checking a manifest addon
-        // that collides this way with an existing custom one did nothing
-        // visible, since the stale custom entry just kept showing in the
-        // Custom Addons list. Drop any other entry that now owns an
-        // overlapping folder before inserting the fresh one.
-        let claimed: HashSet<&str> = extracted_files.iter().map(String::as_str).collect();
-        by_name.retain(|name, e| {
-            name == &addon.name || !(e.kind == "custom" && e.files.iter().any(|f| claimed.contains(f.as_str())))
-        });
-
         by_name.insert(
             addon.name.clone(),
             AddonStateEntry {
@@ -584,6 +747,7 @@ pub async fn sync_addons(
                 files: extracted_files,
                 files_present: true,
                 disabled: false,
+                deleted: false,
                 dependencies: live_deps,
             },
         );
@@ -594,10 +758,12 @@ pub async fn sync_addons(
 
     // Addons that were installed previously but no longer appear in the
     // manifest at all (e.g. an officer deleted the entry) get disabled too,
-    // same as an unchecked one - reversible, not deleted outright.
+    // same as an unchecked one - reversible, not deleted outright. Trashed
+    // entries are left alone — being off the manifest doesn't change
+    // anything about something already sitting in Trash.
     let stale: Vec<String> = by_name
         .iter()
-        .filter(|(name, e)| e.kind != "custom" && !e.disabled && !manifest_names.contains(name.as_str()))
+        .filter(|(name, e)| e.kind != "custom" && !e.disabled && !e.deleted && !manifest_names.contains(name.as_str()))
         .map(|(name, _)| name.clone())
         .collect();
     for name in stale {
@@ -833,6 +999,7 @@ mod tests {
             files: vec!["AddonA".to_string()],
             files_present: true,
             disabled: false,
+            deleted: false,
             dependencies: vec![],
         }];
         save_addons_state(&addon_dir, &entries).unwrap();
@@ -871,6 +1038,7 @@ mod tests {
             files: vec!["AddonA".to_string()],
             files_present: true,
             disabled: false,
+            deleted: false,
             dependencies: vec![],
         }];
         save_addons_state(&addon_dir, &entries).unwrap();
@@ -893,33 +1061,166 @@ mod tests {
         std::fs::remove_dir_all(&tmp).ok();
     }
 
+    fn custom_entry(name: &str, folder: &str) -> AddonStateEntry {
+        AddonStateEntry {
+            name: name.to_string(),
+            kind: "custom".to_string(),
+            version: "1.1".to_string(),
+            api_version: None,
+            sha256: None,
+            notes: String::new(),
+            files: vec![folder.to_string()],
+            files_present: true,
+            disabled: false,
+            deleted: false,
+            dependencies: vec![],
+        }
+    }
+
     #[test]
-    fn delete_addon_removes_files_permanently_and_drops_tracking() {
+    fn delete_addon_moves_to_trash_and_keeps_tracking_as_deleted() {
         let tmp = std::env::temp_dir().join(format!("sotgl-test-delete-{}", std::process::id()));
         let addon_dir = tmp.join("Interface").join("AddOns");
         std::fs::create_dir_all(&addon_dir).unwrap();
         std::fs::create_dir_all(addon_dir.join("PenetratingAnub")).unwrap();
         std::fs::write(addon_dir.join("PenetratingAnub/PenetratingAnub.toc"), b"## Title: Penetrating Anub\n## Version: 1.1\n").unwrap();
 
-        let entries = vec![AddonStateEntry {
-            name: "Penetrating Anub".to_string(),
-            kind: "custom".to_string(),
-            version: "1.1".to_string(),
-            api_version: None,
-            sha256: None,
-            notes: String::new(),
-            files: vec!["PenetratingAnub".to_string()],
-            files_present: true,
-            disabled: false,
-            dependencies: vec![],
-        }];
+        let entries = vec![custom_entry("Penetrating Anub", "PenetratingAnub")];
         save_addons_state(&addon_dir, &entries).unwrap();
 
         let game_path = tmp.to_str().unwrap();
-        let removed = delete_addon(game_path, "Penetrating Anub").unwrap();
-        assert!(removed.is_some());
-        assert!(!addon_dir.join("PenetratingAnub").exists(), "delete must remove the folder entirely");
-        assert!(load_addons_state(&addon_dir).is_empty(), "delete must drop the tracking entry");
+        let deleted_dir = deleted_dir_for(game_path);
+
+        let result = delete_addon(game_path, "Penetrating Anub").unwrap();
+        assert!(result.is_some());
+        assert!(!addon_dir.join("PenetratingAnub").exists(), "folder must leave AddOns");
+        assert!(deleted_dir.join("PenetratingAnub").exists(), "folder must land in .DeletedAddons, not be destroyed");
+
+        let after_delete = load_addons_state(&addon_dir);
+        let entry = after_delete.iter().find(|e| e.name == "Penetrating Anub").unwrap();
+        assert!(entry.deleted, "tracking entry must survive, marked deleted");
+        assert!(!entry.disabled);
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn delete_addon_forever_purges_files_and_tracking() {
+        let tmp = std::env::temp_dir().join(format!("sotgl-test-purge-{}", std::process::id()));
+        let addon_dir = tmp.join("Interface").join("AddOns");
+        std::fs::create_dir_all(&addon_dir).unwrap();
+        std::fs::create_dir_all(addon_dir.join("PenetratingAnub")).unwrap();
+        save_addons_state(&addon_dir, &[custom_entry("Penetrating Anub", "PenetratingAnub")]).unwrap();
+
+        let game_path = tmp.to_str().unwrap();
+        let deleted_dir = deleted_dir_for(game_path);
+
+        delete_addon(game_path, "Penetrating Anub").unwrap();
+        assert!(deleted_dir.join("PenetratingAnub").exists());
+
+        delete_addon_forever(game_path, "Penetrating Anub").unwrap();
+        assert!(!deleted_dir.join("PenetratingAnub").exists(), "must actually remove the trashed files");
+        assert!(load_addons_state(&addon_dir).is_empty(), "must drop the tracking entry entirely");
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn restore_addon_moves_back_to_addons_and_clears_deleted() {
+        let tmp = std::env::temp_dir().join(format!("sotgl-test-restore-{}", std::process::id()));
+        let addon_dir = tmp.join("Interface").join("AddOns");
+        std::fs::create_dir_all(&addon_dir).unwrap();
+        std::fs::create_dir_all(addon_dir.join("PenetratingAnub")).unwrap();
+        std::fs::write(addon_dir.join("PenetratingAnub/PenetratingAnub.toc"), b"## Title: Penetrating Anub\n## Version: 1.1\n").unwrap();
+        save_addons_state(&addon_dir, &[custom_entry("Penetrating Anub", "PenetratingAnub")]).unwrap();
+
+        let game_path = tmp.to_str().unwrap();
+        delete_addon(game_path, "Penetrating Anub").unwrap();
+
+        let restored = restore_addon(game_path, "Penetrating Anub", false).unwrap();
+        assert!(restored.is_some());
+        assert!(addon_dir.join("PenetratingAnub").exists(), "folder must move back to AddOns");
+        assert!(!deleted_dir_for(game_path).join("PenetratingAnub").exists());
+
+        let after_restore = load_addons_state(&addon_dir);
+        let entry = after_restore.iter().find(|e| e.name == "Penetrating Anub").unwrap();
+        assert!(!entry.deleted);
+        assert!(!entry.disabled);
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn restore_addon_refuses_to_evict_an_occupant_without_force() {
+        let tmp = std::env::temp_dir().join(format!("sotgl-test-restore-collide-{}", std::process::id()));
+        let addon_dir = tmp.join("Interface").join("AddOns");
+        std::fs::create_dir_all(&addon_dir).unwrap();
+        std::fs::create_dir_all(addon_dir.join("SharedFolder")).unwrap();
+
+        // "Old" is trashed, then a differently-named "New" addon gets
+        // installed into the very same folder name while it's away.
+        save_addons_state(&addon_dir, &[custom_entry("Old", "SharedFolder")]).unwrap();
+        let game_path = tmp.to_str().unwrap();
+        delete_addon(game_path, "Old").unwrap();
+
+        std::fs::create_dir_all(addon_dir.join("SharedFolder")).unwrap();
+        let mut entries = load_addons_state(&addon_dir);
+        entries.push(custom_entry("New", "SharedFolder"));
+        save_addons_state(&addon_dir, &entries).unwrap();
+
+        let err = restore_addon(game_path, "Old", false).unwrap_err();
+        assert!(err.contains("New"), "error must name the occupant: {err}");
+        assert!(addon_dir.join("SharedFolder").exists(), "occupant must survive an unforced restore attempt");
+
+        let restored = restore_addon(game_path, "Old", true).unwrap();
+        assert!(restored.is_some(), "forced restore must succeed");
+        let after = load_addons_state(&addon_dir);
+        assert!(after.iter().find(|e| e.name == "New").is_none(), "occupant must be purged entirely");
+        assert!(after.iter().find(|e| e.name == "Old").is_some_and(|e| !e.deleted));
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    // sync_addons itself needs a real network download and a Tauri
+    // AppHandle, so it can't be exercised directly in a unit test — this
+    // instead drives the exact same peek-then-evict-then-extract sequence
+    // sync_addons runs internally (see its use of list_zip_top_level there),
+    // to confirm that ordering actually preserves a colliding custom
+    // addon's files instead of the old silent-overwrite behavior.
+    #[test]
+    fn collision_detection_moves_existing_addon_to_trash_before_extract_would_overwrite_it() {
+        let tmp = std::env::temp_dir().join(format!("sotgl-test-sync-collide-{}", std::process::id()));
+        let addon_dir = tmp.join("Interface").join("AddOns");
+        std::fs::create_dir_all(&addon_dir).unwrap();
+
+        // A custom addon happens to occupy the exact folder name the
+        // manifest addon's own zip will extract into ("AddonA").
+        std::fs::create_dir_all(addon_dir.join("AddonA")).unwrap();
+        std::fs::write(addon_dir.join("AddonA/custom-marker.txt"), b"do not overwrite me").unwrap();
+        save_addons_state(&addon_dir, &[custom_entry("MyCustomThing", "AddonA")]).unwrap();
+
+        let game_path = tmp.to_str().unwrap();
+        let deleted_dir = deleted_dir_for(game_path);
+
+        let zip_path = tmp.join("AddonA.zip");
+        make_test_zip(&zip_path);
+
+        let incoming = list_zip_top_level(&zip_path).unwrap();
+        assert_eq!(incoming, vec!["AddonA".to_string()]);
+
+        let mut entries = load_addons_state(&addon_dir);
+        let victim = entries.iter_mut().find(|e| e.name == "MyCustomThing").unwrap();
+        move_addon_files(&addon_dir, &deleted_dir, &victim.files).unwrap();
+        victim.deleted = true;
+        save_addons_state(&addon_dir, &entries).unwrap();
+
+        assert!(deleted_dir.join("AddonA").exists(), "custom addon's original files must survive in Trash");
+        assert!(deleted_dir.join("AddonA/custom-marker.txt").exists());
+        assert!(!addon_dir.join("AddonA/custom-marker.txt").exists(), "folder must be clear for the real extract to follow");
+
+        let extracted = extract_zip(&zip_path, &addon_dir).unwrap();
+        assert_eq!(extracted, vec!["AddonA".to_string()]);
+        assert!(addon_dir.join("AddonA/AddonA.toc").exists(), "manifest addon extracts cleanly into the vacated folder");
 
         std::fs::remove_dir_all(&tmp).ok();
     }

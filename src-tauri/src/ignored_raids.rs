@@ -1,12 +1,13 @@
+//! Raid IDs the user has explicitly chosen to hide from the Raids view
+//! (e.g. a pug/alt run HeadCount happened to finalize) — a permanent
+//! decision, unlike sync_log's rolling diagnostic entries, so this is its
+//! own small file rather than reusing that (capped, evictable) log.
+
 use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
 
-/// Raid IDs the user has explicitly chosen to hide from the Raids view
-/// (e.g. a pug/alt run HeadCount happened to finalize) — a permanent
-/// decision, unlike sync_log's rolling diagnostic entries, so this is its
-/// own small file rather than reusing that (capped, evictable) log.
 fn ignored_raids_path(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app
         .path()

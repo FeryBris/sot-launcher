@@ -1,6 +1,18 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { confirmDelete, confirmDisable, deleteAddonNow, isAddonWanted, refreshManifest, setAddonDisabledNow, store } from '../store'
+import {
+  confirmDelete,
+  confirmDeleteForever,
+  confirmDisable,
+  confirmRestoreEviction,
+  deleteAddonForeverNow,
+  deleteAddonNow,
+  isAddonWanted,
+  refreshManifest,
+  restoreAddonNow,
+  setAddonDisabledNow,
+  store,
+} from '../store'
 import AddonRow from '../components/AddonRow.vue'
 import LoadingSpinner from '../components/LoadingSpinner.vue'
 
@@ -25,13 +37,28 @@ const groups = computed(() => {
 const customAddons = computed(() => {
   const query = search.value.trim().toLowerCase()
   return Object.values(store.installed?.addons ?? {})
-    .filter((a) => a.type === 'custom' && a.name.toLowerCase().includes(query))
+    .filter((a) => a.type === 'custom' && !a.deleted && a.name.toLowerCase().includes(query))
     .filter((a) => !hideDisabled.value || !a.disabled)
     .sort(byName)
 })
 
+/** Every trashed addon regardless of type (managed or custom) - Trash is one
+ *  unified list, not split by where an addon originally came from. */
+const trashedAddons = computed(() => {
+  const query = search.value.trim().toLowerCase()
+  return Object.values(store.installed?.addons ?? {})
+    .filter((a) => a.deleted && a.name.toLowerCase().includes(query))
+    .sort(byName)
+})
+
 const hasResults = computed(
-  () => groups.value.mandatory.length + groups.value.recommended.length + groups.value.optional.length + customAddons.value.length > 0,
+  () =>
+    groups.value.mandatory.length +
+      groups.value.recommended.length +
+      groups.value.optional.length +
+      customAddons.value.length +
+      trashedAddons.value.length >
+    0,
 )
 
 async function onDeleteCustom(name: string) {
@@ -48,6 +75,25 @@ async function onToggleCustom(name: string, currentlyDisabled: boolean) {
     setAddonDisabledNow(name, false) // re-enabling isn't destructive, no confirm needed
   }
 }
+
+async function onRestore(name: string) {
+  try {
+    await restoreAddonNow(name)
+  } catch (e) {
+    // Blocked because something else now occupies this addon's folder -
+    // the thrown message already names it; show it as-is and let the user
+    // decide whether evicting the occupant is worth it.
+    if (await confirmRestoreEviction(String(e))) {
+      await restoreAddonNow(name, true)
+    }
+  }
+}
+
+async function onDeleteForever(name: string) {
+  if (await confirmDeleteForever(name)) {
+    deleteAddonForeverNow(name)
+  }
+}
 </script>
 
 <template>
@@ -59,7 +105,7 @@ async function onToggleCustom(name: string, currentlyDisabled: boolean) {
           {{ store.loadingManifest ? 'Refreshing...' : 'Refresh' }}
         </button>
       </div>
-      <p>Mandatory addons always sync. Uncheck anything else to leave it out — unchecking something already installed moves it to Interface/.DisabledAddons on the next sync (recoverable by re-checking, or use the ✕ to delete it for good).</p>
+      <p>Mandatory addons always sync. Uncheck anything else to leave it out — unchecking something already installed moves it to Interface/.DisabledAddons on the next sync (recoverable by re-checking). Use the ✕ to delete something — it moves to Trash below, recoverable until you delete it forever from there.</p>
       <div v-if="store.manifest" class="filters">
         <input v-model="search" type="text" class="search-input" placeholder="Search addons..." />
         <label class="hide-disabled">
@@ -104,7 +150,7 @@ async function onToggleCustom(name: string, currentlyDisabled: boolean) {
 
       <section v-if="customAddons.length" class="group">
         <h2>Custom Addons ({{ customAddons.length }})</h2>
-        <p class="custom-hint">Installed outside the guild launcher — not synced or managed here.</p>
+        <p class="custom-hint">Installed outside the guild launcher — never auto-synced or updated, but you can still enable/disable or delete them here.</p>
         <div class="list">
           <div v-for="c in customAddons" :key="c.files[0]" class="custom-row" :class="{ dim: c.disabled }">
             <div class="custom-main">
@@ -120,7 +166,29 @@ async function onToggleCustom(name: string, currentlyDisabled: boolean) {
               <button class="action-btn" @click="onToggleCustom(c.name, c.disabled)">
                 {{ c.disabled ? 'Enable' : 'Disable' }}
               </button>
-              <button class="delete-btn" title="Delete completely" @click="onDeleteCustom(c.name)">✕</button>
+              <button class="delete-btn" title="Delete (moves to Trash)" @click="onDeleteCustom(c.name)">✕</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section v-if="trashedAddons.length" class="group">
+        <h2>Trash ({{ trashedAddons.length }})</h2>
+        <p class="custom-hint">Deleted addons land here first — restore one, or delete it forever to actually free the space.</p>
+        <div class="list">
+          <div v-for="t in trashedAddons" :key="t.files[0]" class="custom-row dim">
+            <div class="custom-main">
+              <div class="name">
+                {{ t.name }}<span class="version">v{{ t.version }}</span>
+                <span class="badge off">{{ t.type === 'custom' ? 'Custom' : 'Managed' }}</span>
+              </div>
+              <div v-if="t.notes" class="notes">{{ t.notes }}</div>
+              <div v-if="t.dependencies.length" class="requires">Requires: {{ t.dependencies.join(', ') }}</div>
+              <div class="folder">{{ t.files[0] }}</div>
+            </div>
+            <div class="custom-actions">
+              <button class="action-btn" @click="onRestore(t.name)">Restore</button>
+              <button class="delete-btn" title="Delete forever" @click="onDeleteForever(t.name)">✕</button>
             </div>
           </div>
         </div>

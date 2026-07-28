@@ -56,7 +56,10 @@ export interface AddonStateEntry {
   notes: string
   files: string[]
   filesPresent: boolean
+  /** In Interface/.DisabledAddons instead of Interface/AddOns. Always false once `deleted` is true. */
   disabled: boolean
+  /** In Interface/.DeletedAddons (Trash) — recoverable via restore, or purged via delete forever. */
+  deleted: boolean
   /** Folder names of other addons this one requires, read from its .toc. */
   dependencies: string[]
 }
@@ -201,9 +204,9 @@ export interface GuildSyncStats {
 }
 
 /** One guild member as reported by GetGuildRosterInfo() via the
- *  GuildExport addon — visible for the WHOLE guild from any single
+ *  SoTGuildSync addon — visible for the WHOLE guild from any single
  *  member's client, unlike GuildSyncData which only ever covers the
- *  character actually logged in and running SoTGuildSync. */
+ *  character actually logged in and running SoTCharacterSync. */
 export interface GuildRosterMember {
   name: string
   class: string | null
@@ -214,11 +217,11 @@ export interface GuildRosterMember {
   publicNote: string | null
   officerNote: string | null
   isOnline: boolean | null
-  /** The only source of this for a character that never runs SoTGuildSync itself. */
+  /** The only source of this for a character that never runs SoTCharacterSync itself. */
   achievementPoints: number | null
 }
 
-/** Parsed from the GuildExport addon's SavedVariables. */
+/** Parsed from the SoTGuildSync addon's SavedVariables. */
 export interface GuildRosterData {
   guildName: string | null
   realm: string | null
@@ -318,7 +321,7 @@ export interface SyncableRaid {
   isIgnored: boolean
 }
 
-/** Parsed from the SoTGuildSync addon's SavedVariables — used unchanged
+/** Parsed from the SoTCharacterSync addon's SavedVariables — used unchanged
  *  for both local display and the sync-to-web payload. */
 export interface GuildSyncData {
   name: string

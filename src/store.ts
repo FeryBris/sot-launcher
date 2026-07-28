@@ -40,7 +40,7 @@ interface Store {
   guildSyncing: boolean
   guildSyncError: string
   guildLastSyncedAt: number | null
-  /** Full guild roster from the GuildExport addon — unlike guildSyncData,
+  /** Full guild roster from the SoTGuildSync addon — unlike guildSyncData,
    *  not scoped to characters logged into on this WoW account. */
   guildRoster: GuildRosterData | null
   guildRosterSyncing: boolean
@@ -182,7 +182,7 @@ export async function init() {
     store.discordError = message
   })
 
-  // Rust watches SoTGuildSync.lua/GuildExport.lua directly (see
+  // Rust watches SoTCharacterSync.lua/SoTGuildSync.lua directly (see
   // src-tauri/src/watcher.rs) and emits this the moment either actually
   // changes — no need to poll on a timer for something that only ever
   // changes on real WoW-side events.
@@ -218,7 +218,7 @@ export async function refreshMyLoot() {
   }
 }
 
-/** Re-reads the SoTGuildSync addon's SavedVariables snapshot, if any. */
+/** Re-reads the SoTCharacterSync addon's SavedVariables snapshot, if any. */
 export async function refreshGuildSyncData() {
   if (!currentGamePath()) {
     store.guildSyncData = []
@@ -228,7 +228,7 @@ export async function refreshGuildSyncData() {
     store.guildSyncData = await api.getGuildSyncData()
   } catch (e) {
     // A parse failure here almost always means the file watcher fired
-    // while WoW was still mid-write to SoTGuildSync.lua (e.g. the big
+    // while WoW was still mid-write to SoTCharacterSync.lua (e.g. the big
     // flush on logout) and caught a truncated file — not a real "no data"
     // state. Keep whatever was last successfully read rather than
     // flashing the UI back to empty; the next file-changed event (or app
@@ -249,7 +249,7 @@ async function syncGuildDataToWeb() {
   }
 }
 
-/** Re-reads the GuildExport addon's SavedVariables snapshot, if any. */
+/** Re-reads the SoTGuildSync addon's SavedVariables snapshot, if any. */
 export async function refreshGuildRoster() {
   if (!currentGamePath()) {
     store.guildRoster = null
@@ -267,7 +267,7 @@ let lastAutoRosterSyncedAt = 0
 
 /** Same debounced-auto-sync shape as maybeAutoSyncGuildData, but keyed off
  *  the roster snapshot's own `updatedAt` (a single timestamp for the whole
- *  roster, set whenever GuildExport re-saves) rather than a per-character
+ *  roster, set whenever SoTGuildSync re-saves) rather than a per-character
  *  join — there's no per-member identity to track here, just "has the
  *  addon written a newer snapshot than what we last sent". */
 async function maybeAutoSyncGuildRoster() {
@@ -385,7 +385,7 @@ export function getDependents(name: string): string[] {
   const targetFolders = new Set(target.files.map((f) => f.toLowerCase()))
   const dependents: string[] = []
   for (const entry of Object.values(store.installed?.addons ?? {})) {
-    if (entry.name === name || entry.disabled) continue
+    if (entry.name === name || entry.disabled || entry.deleted) continue
     if (entry.dependencies.some((dep) => targetFolders.has(dep.toLowerCase()))) {
       dependents.push(entry.name)
     }
@@ -408,10 +408,25 @@ export function confirmDisable(name: string): Promise<boolean> {
   return requestConfirm({ title: 'Disable addon', message, confirmLabel: 'Disable', danger: false })
 }
 
-/** One themed confirm dialog for a permanent delete action. */
+/** One themed confirm dialog for moving an addon to Trash. */
 export function confirmDelete(name: string): Promise<boolean> {
-  const message = `Delete ${name} completely?${dependentWarning(name, 'Deleting')}\n\nThis can't be undone - you'd need to sync it again to get it back.`
+  const message = `Delete ${name}?${dependentWarning(name, 'Deleting')}\n\nIt will move to Interface/.DeletedAddons - restore it from Trash later, or delete it forever from there.`
   return requestConfirm({ title: 'Delete addon', message, confirmLabel: 'Delete', danger: true })
+}
+
+/** One themed confirm dialog for permanently purging a trashed addon — the actual point of no return. */
+export function confirmDeleteForever(name: string): Promise<boolean> {
+  const message = `Permanently delete ${name}?\n\nThis can't be undone - you'd need to sync it again (or reinstall it by hand, for a custom addon) to get it back.`
+  return requestConfirm({ title: 'Delete forever', message, confirmLabel: 'Delete Forever', danger: true })
+}
+
+/** One themed confirm dialog for restoring a trashed addon when doing so
+ *  requires permanently deleting whatever currently occupies its folder.
+ *  `reason` is the raw message from a blocked restoreAddonNow call (already
+ *  names the occupant) - shown as-is rather than re-parsed on this end. */
+export function confirmRestoreEviction(reason: string): Promise<boolean> {
+  const message = `${reason} - this can't be undone.\n\nContinue anyway?`
+  return requestConfirm({ title: 'Restore addon', message, confirmLabel: 'Restore anyway', danger: true })
 }
 
 /** Immediate disable/enable for one addon (managed or custom) - moves its folder
@@ -425,13 +440,37 @@ export async function setAddonDisabledNow(name: string, disabled: boolean) {
   }
 }
 
-/** Immediate, permanent delete for one addon (managed or custom). */
+/** Immediate move-to-Trash for one addon (managed or custom) - recoverable via restoreAddonNow. */
 export async function deleteAddonNow(name: string) {
   if (!store.manifest) return
   try {
     store.installed = await api.deleteAddon(store.manifest, name)
   } catch (e) {
     store.syncError = String(e)
+  }
+}
+
+/** Permanently purges a trashed addon - the actual point of no return. */
+export async function deleteAddonForeverNow(name: string) {
+  if (!store.manifest) return
+  try {
+    store.installed = await api.deleteAddonForever(store.manifest, name)
+  } catch (e) {
+    store.syncError = String(e)
+  }
+}
+
+/** Moves a trashed addon back to Interface/AddOns. Rejects with the
+ *  occupant's name (not a generic Error) if `force` is false and something
+ *  else currently owns its folder, so the caller can show
+ *  confirmRestoreEviction and retry with force: true. */
+export async function restoreAddonNow(name: string, force = false) {
+  if (!store.manifest) return
+  try {
+    store.installed = await api.restoreAddon(store.manifest, name, force)
+  } catch (e) {
+    store.syncError = String(e)
+    throw e
   }
 }
 

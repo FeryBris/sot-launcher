@@ -69,6 +69,16 @@ export function deleteAddon(manifest: Manifest, name: string): Promise<Installed
   return invoke('delete_addon', { manifest, name })
 }
 
+export function deleteAddonForever(manifest: Manifest, name: string): Promise<InstalledState> {
+  return invoke('delete_addon_forever', { manifest, name })
+}
+
+/** `force: true` permanently deletes whatever currently occupies the
+ *  restored addon's folder — only pass it after the user has confirmed. */
+export function restoreAddon(manifest: Manifest, name: string, force: boolean): Promise<InstalledState> {
+  return invoke('restore_addon', { manifest, name, force })
+}
+
 export function runSync(manifest: Manifest, addonEnabled: Record<string, boolean>): Promise<CombinedSyncResult> {
   return invoke('run_sync', { manifest, addonEnabled })
 }
@@ -128,8 +138,8 @@ export function onSyncProgress(handler: (p: SyncProgress) => void): Promise<Unli
   return listen<SyncProgress>('sync-progress', (event) => handler(event.payload))
 }
 
-/** Fires whenever SoTGuildSync.lua or GuildExport.lua actually changes on
- *  disk (see src-tauri/src/watcher.rs) — replaces polling on a timer. */
+/** Fires whenever SoTCharacterSync.lua or SoTGuildSync.lua actually changes
+ *  on disk (see src-tauri/src/watcher.rs) — replaces polling on a timer. */
 export function onGuildDataChanged(handler: () => void): Promise<UnlistenFn> {
   return listen('guild-data-changed', () => handler())
 }

@@ -4,10 +4,42 @@ on:
   push:
     tags:
       - 'v*'
+    branches: [main]
+    paths:
+      - 'src-tauri/tauri.conf.json'
+      - 'src-tauri/Cargo.toml'
+      - 'package.json'
   workflow_dispatch:
 
 jobs:
+  # A plain push to main (even one that bumps the version) can't itself
+  # create+push the "app-vX.Y.Z" tag tauri-action publishes under below —
+  # a tag pushed by the default GITHUB_TOKEN from inside a workflow run
+  # doesn't trigger further workflow runs, so there'd be nothing to kick
+  # off the actual build. Checking the version here and gating the real
+  # release job on it directly (same run, no re-trigger needed) sidesteps
+  # that entirely.
+  check-version:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: check
+        run: |
+          VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          if git rev-parse "app-v$VERSION" >/dev/null 2>&1; then
+            echo "Version $VERSION already has a release tag, skipping"
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          fi
+
   release:
+    needs: [check-version]
+    if: always() && (github.event_name != 'push' || startsWith(github.ref, 'refs/tags/') || needs.check-version.outputs.should_release == 'true')
     permissions:
       contents: write
     strategy:

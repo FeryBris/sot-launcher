@@ -175,9 +175,11 @@ pub fn set_addon_disabled(app: AppHandle, manifest: Manifest, name: String, disa
     Ok(sync::get_installed_state(&game_path, &manifest))
 }
 
-/// Permanently deletes a tracked addon (managed or custom) right away,
-/// without waiting for a sync. For managed addons this also unchecks it so
-/// it doesn't silently come back on the next sync.
+/// Moves a tracked addon (managed or custom) to Interface/.DeletedAddons
+/// right away, without waiting for a sync — recoverable later via
+/// restore_addon, or purged for good via delete_addon_forever. For managed
+/// addons this also unchecks it so it doesn't silently come back on the
+/// next sync.
 #[tauri::command]
 pub fn delete_addon(app: AppHandle, manifest: Manifest, name: String) -> Result<InstalledState, String> {
     let mut s = settings::load_settings(&app)?;
@@ -193,7 +195,32 @@ pub fn delete_addon(app: AppHandle, manifest: Manifest, name: String) -> Result<
     Ok(sync::get_installed_state(&game_path, &manifest))
 }
 
-/// Reads the SoTGuildSync addon's current SavedVariables snapshot for
+/// Permanently purges a trashed addon's files and drops its tracking entry
+/// — the actual point of no return. Only acts on something already in
+/// Interface/.DeletedAddons.
+#[tauri::command]
+pub fn delete_addon_forever(app: AppHandle, manifest: Manifest, name: String) -> Result<InstalledState, String> {
+    let s = settings::load_settings(&app)?;
+    let game_path = s.game_path().ok_or_else(|| "no game folder configured".to_string())?;
+    sync::delete_addon_forever(&game_path, &name)?;
+    Ok(sync::get_installed_state(&game_path, &manifest))
+}
+
+/// Moves a trashed addon back to Interface/AddOns. If a different addon
+/// currently occupies its folder (e.g. a managed addon re-synced into that
+/// name while this one sat in Trash), fails with an error naming the
+/// occupant unless `force` is set — the frontend confirms with the user
+/// before retrying with `force: true`, which permanently deletes the
+/// occupant first.
+#[tauri::command]
+pub fn restore_addon(app: AppHandle, manifest: Manifest, name: String, force: bool) -> Result<InstalledState, String> {
+    let s = settings::load_settings(&app)?;
+    let game_path = s.game_path().ok_or_else(|| "no game folder configured".to_string())?;
+    sync::restore_addon(&game_path, &name, force)?;
+    Ok(sync::get_installed_state(&game_path, &manifest))
+}
+
+/// Reads the SoTCharacterSync addon's current SavedVariables snapshot for
 /// local display — one entry per guild character logged into on this WoW
 /// account. Empty covers both "no game folder set" and "addon hasn't
 /// written anything yet", neither of which is an error state for the UI.
@@ -257,10 +284,10 @@ async fn sync_guild_data_to_web_inner(app: &AppHandle, state: &State<'_, AppStat
     Ok(())
 }
 
-/// Reads the GuildExport addon's current full-guild-roster snapshot, if
+/// Reads the SoTGuildSync addon's current full-guild-roster snapshot, if
 /// anyone in the guild has run that addon yet. Unlike get_guild_sync_data
 /// this isn't scoped to "characters logged into on this WoW account" — one
-/// person running GuildExport covers the whole roster.
+/// person running SoTGuildSync covers the whole roster.
 #[tauri::command]
 pub fn get_guild_roster(app: AppHandle) -> Result<Option<crate::guild_roster::GuildRosterData>, String> {
     let s = settings::load_settings(&app)?;
@@ -301,7 +328,7 @@ async fn sync_guild_roster_to_web_inner(app: &AppHandle, state: &State<'_, AppSt
         .ok_or_else(|| "sign in with Discord first".to_string())?;
 
     let data = crate::guild_roster::read_guild_roster(Path::new(&game_path))?
-        .ok_or_else(|| "no guild roster data found yet — run GuildExport first".to_string())?;
+        .ok_or_else(|| "no guild roster data found yet — run SoTGuildSync first".to_string())?;
 
     if data.members.is_empty() {
         return Err("guild roster is empty".to_string());

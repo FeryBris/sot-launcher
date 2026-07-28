@@ -12,7 +12,7 @@ use crate::commands::AppState;
 /// whenever the configured game folder changes.
 ///
 /// Emits `guild-data-changed` instead of the frontend polling on a
-/// timer — SoTGuildSync.lua/GuildExport.lua only ever change on real
+/// timer — SoTCharacterSync.lua/SoTGuildSync.lua only ever change on real
 /// WoW-side events (login, logout, gear/gold changes, guild roster
 /// updates), not continuously, so there's nothing to gain from checking
 /// on a fixed interval versus reacting the moment the file actually
@@ -74,7 +74,7 @@ pub fn watch_guild_data(app: &AppHandle, game_path: &Path) {
                     let relevant = event.paths.iter().any(|p| {
                         matches!(
                             p.file_name().and_then(|n| n.to_str()),
-                            Some("SoTGuildSync.lua") | Some("GuildExport.lua")
+                            Some("SoTCharacterSync.lua") | Some("SoTGuildSync.lua")
                         )
                     });
                     if relevant {

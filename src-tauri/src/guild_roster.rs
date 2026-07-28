@@ -5,12 +5,12 @@ use std::path::Path;
 use crate::guild_sync::{extract_json_string, find_saved_variables_file};
 
 /// One guild member as reported by GetGuildRosterInfo() via the separate
-/// GuildExport addon — visible for the WHOLE guild from any single
-/// member's client, unlike SoTGuildSync's own-character-only data.
-/// Deliberately a SEPARATE addon rather than folded into SoTGuildSync:
-/// every guild member runs SoTGuildSync, but a full-roster sync touches
+/// SoTGuildSync addon — visible for the WHOLE guild from any single
+/// member's client, unlike SoTCharacterSync's own-character-only data.
+/// Deliberately a SEPARATE addon rather than folded into SoTCharacterSync:
+/// every guild member runs SoTCharacterSync, but a full-roster sync touches
 /// every OTHER member's rank/level/class in one batch, so only whoever
-/// installs GuildExport (an officer, in practice) can submit it.
+/// installs SoTGuildSync (an officer, in practice) can submit it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GuildRosterMember {
@@ -24,7 +24,7 @@ pub struct GuildRosterMember {
     pub officer_note: Option<String>,
     pub is_online: Option<bool>,
     /// The only source of this for a character that never runs
-    /// SoTGuildSync itself.
+    /// SoTCharacterSync itself.
     pub achievement_points: Option<i64>,
 }
 
@@ -38,11 +38,11 @@ pub struct GuildRosterData {
     pub members: Vec<GuildRosterMember>,
 }
 
-/// Reads the GuildExport addon's current full-roster snapshot, if any.
+/// Reads the SoTGuildSync addon's current full-roster snapshot, if any.
 /// `None` covers both "no game folder" and "nobody's run the addon yet" —
 /// neither is an error, just "no roster data available right now".
 pub fn read_guild_roster(game_path: &Path) -> Result<Option<GuildRosterData>, String> {
-    let Some(path) = find_saved_variables_file(game_path, "GuildExport.lua") else {
+    let Some(path) = find_saved_variables_file(game_path, "SoTGuildSync.lua") else {
         return Ok(None);
     };
 

@@ -120,7 +120,7 @@ function viewCharacterOnWeb(character: GuildSyncData) {
       </div>
 
       <div v-if="!store.guildSyncData.length" class="empty">
-        No character data yet — log in as a Stalkers of Time member with the SoTGuildSync addon
+        No character data yet — log in as a Stalkers of Time member with the SoTCharacterSync addon
         installed.
       </div>
 

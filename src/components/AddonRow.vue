@@ -66,7 +66,7 @@ async function onDelete() {
     </div>
     <div class="row-actions">
       <span class="badge" :class="status">{{ statusLabel[status] }}</span>
-      <button v-if="installed" class="delete-btn" title="Delete completely" @click.stop.prevent="onDelete">✕</button>
+      <button v-if="installed" class="delete-btn" title="Delete (moves to Trash)" @click.stop.prevent="onDelete">✕</button>
     </div>
   </label>
 </template>
