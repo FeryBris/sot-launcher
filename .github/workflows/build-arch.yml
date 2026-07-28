@@ -64,7 +64,12 @@ jobs:
           mv ./*.deb sotlauncher.deb
           sed -i "s/^pkgver=.*/pkgver=${{ steps.ver.outputs.version }}/" PKGBUILD
           chown -R builder:builder .
-          su builder -c "makepkg -f --nosign"
+          # --nodeps: depends=() in the PKGBUILD describes the resulting
+          # package's runtime deps for pacman, not build-time requirements —
+          # we're repackaging an existing .deb, not compiling, so none of
+          # webkit2gtk-4.1/gtk3/libappindicator-gtk3 need to be on this
+          # machine, but makepkg checks for them anyway unless told not to.
+          su builder -c "makepkg -f --nosign --nodeps"
 
       - name: Upload package to the release
         env:
