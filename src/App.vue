@@ -10,7 +10,7 @@ import SettingsView from './views/Settings.vue'
 import PlayBar from './components/PlayBar.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import { init as initStore, playNow, signInWithDiscord, store } from './store'
-import { isSelfUpdateSupported, onTrayPrimaryClicked, openLauncherDownloadPage, setTrayPrimaryLabel } from './api'
+import { isSelfUpdateSupported, logClientEvent, onTrayPrimaryClicked, openLauncherDownloadPage, setTrayPrimaryLabel } from './api'
 
 type Tab = 'home' | 'addons' | 'raids' | 'settings'
 
@@ -27,6 +27,14 @@ const updateState = ref<'idle' | 'checking' | 'downloading' | 'ready' | 'error'>
 const updateError = ref('')
 const updateProgress = ref(0)
 
+/** Best-effort breadcrumb into debug.json — logClientEvent's own Rust side
+ *  already swallows its errors, but the IPC call itself could still reject
+ *  (e.g. mid-teardown), and a logging hiccup must never break the update
+ *  flow it's trying to observe. */
+function logUpdateEvent(level: 'error' | 'info', message: string) {
+  logClientEvent(level, 'launcher_update', message).catch(() => {})
+}
+
 async function checkUpdate() {
   updateState.value = 'checking'
   try {
@@ -39,6 +47,7 @@ async function checkUpdate() {
     }
   } catch (e) {
     console.error('[updater] check failed:', e)
+    logUpdateEvent('error', `check failed: ${e}`)
     updateState.value = 'error'
     updateError.value = String(e)
   }
@@ -65,9 +74,15 @@ async function installUpdate() {
       }
     })
     updateState.value = 'ready'
+    // Windows' update handoff exits this process so the installer can
+    // replace its files, whether or not that installer is actually allowed
+    // to run under strict AppLocker/WDAC policies — if this is the last
+    // entry debug.json ever gets, that silence is itself the diagnosis.
+    await logClientEvent('info', 'launcher_update', 'install downloaded, relaunching to hand off to installer').catch(() => {})
     await relaunch()
   } catch (e) {
     console.error('[updater] install failed:', e)
+    logUpdateEvent('error', `install failed: ${e}`)
     updateState.value = 'error'
     updateError.value = String(e)
   }

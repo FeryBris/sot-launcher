@@ -214,6 +214,7 @@ pub fn run() {
       commands::sync_guild_roster_to_web,
       commands::get_sync_log,
       commands::get_debug_log,
+      commands::log_client_event,
       commands::get_captured_raids,
       commands::sync_raid_to_web,
       commands::set_raid_ignored,

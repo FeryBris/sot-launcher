@@ -9,6 +9,11 @@ use tauri::{AppHandle, Manager};
 /// last night's raid sync" without needing rotation.
 const MAX_ENTRIES: usize = 200;
 
+/// Entries older than this are dropped too, regardless of count — this is
+/// a "why didn't last night's sync work" aid, not a permanent history, so
+/// week-old attempts stop being worth keeping around.
+const MAX_AGE_MS: i64 = 7 * 24 * 60 * 60 * 1000;
+
 fn sync_log_path(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app
         .path()
@@ -25,21 +30,27 @@ pub fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// Newest first. An unreadable/missing/corrupt file is treated as empty
-/// rather than an error — this is a diagnostic aid, not something that
-/// should ever block startup or a sync attempt.
+/// Newest first, with anything older than MAX_AGE_MS already dropped. An
+/// unreadable/missing/corrupt file is treated as empty rather than an
+/// error — this is a diagnostic aid, not something that should ever block
+/// startup or a sync attempt.
 pub fn load_sync_log(app: &AppHandle) -> Result<Vec<SyncLogEntry>, String> {
     let path = sync_log_path(app)?;
     if !path.exists() {
         return Ok(Vec::new());
     }
     let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    Ok(serde_json::from_str(&raw).unwrap_or_default())
+    let entries: Vec<SyncLogEntry> = serde_json::from_str(&raw).unwrap_or_default();
+    let cutoff = now_ms() - MAX_AGE_MS;
+    Ok(entries.into_iter().filter(|e| e.at >= cutoff).collect())
 }
 
-/// Records one sync attempt, newest first, capped at MAX_ENTRIES. Errors
-/// reading/writing the log are swallowed on purpose — a logging failure
-/// must never surface as a sync failure to the caller.
+/// Records one sync attempt, newest first, capped at MAX_ENTRIES and
+/// MAX_AGE_MS (via load_sync_log, which already filters expired entries
+/// before this appends and rewrites the file — so the file actually
+/// shrinks over time instead of just being filtered at read time forever).
+/// Errors reading/writing the log are swallowed on purpose — a logging
+/// failure must never surface as a sync failure to the caller.
 pub fn append_sync_log(app: &AppHandle, entry: SyncLogEntry) {
     let Ok(path) = sync_log_path(app) else { return };
     let mut entries = load_sync_log(app).unwrap_or_default();

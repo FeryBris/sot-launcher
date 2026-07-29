@@ -392,6 +392,26 @@ pub fn get_debug_log(app: AppHandle) -> Result<Vec<crate::debug_log::DebugLogEnt
     crate::debug_log::load_debug_log(&app)
 }
 
+/// Bridges the frontend into debug_log.rs - for JS-side operations that
+/// never go through a Rust command at all (the updater plugin's
+/// check()/downloadAndInstall()/relaunch() are called directly from
+/// App.vue), there's otherwise no way to leave a trace of what was
+/// attempted. Most useful right before a step that might tear down the
+/// whole process before any JS catch block gets a chance to run (Windows'
+/// update handoff exits the app to let the installer replace it, whether
+/// or not that installer is actually allowed to run) - if debug.json's
+/// last entry is "install attempted" with nothing after it, that's
+/// already a real diagnostic.
+#[tauri::command]
+pub fn log_client_event(app: AppHandle, level: String, context: String, message: String) -> Result<(), String> {
+    match level.as_str() {
+        "error" => crate::debug_log::error(&app, &context, &message),
+        "warn" => crate::debug_log::warn(&app, &context, &message),
+        _ => crate::debug_log::info(&app, &context, &message),
+    }
+    Ok(())
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncableRaid {

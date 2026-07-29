@@ -126,6 +126,14 @@ export function getDebugLog(): Promise<DebugLogEntry[]> {
   return invoke('get_debug_log')
 }
 
+/** Bridges a frontend-only event into debug.json — for operations that
+ *  never go through a Rust command (the updater plugin's check()/
+ *  downloadAndInstall()/relaunch() are called directly from App.vue), this
+ *  is the only way to leave a trace of what was attempted. */
+export function logClientEvent(level: 'error' | 'warn' | 'info', context: string, message: string): Promise<void> {
+  return invoke('log_client_event', { level, context, message })
+}
+
 /** Recent raids the SoTRaidLootSync addon has captured, each annotated
  *  with whether this launcher has already synced it — powers the Raids tab. */
 export function getCapturedRaids(): Promise<SyncableRaid[]> {

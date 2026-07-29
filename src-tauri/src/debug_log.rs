@@ -13,6 +13,11 @@ use tauri::{AppHandle, Manager};
 /// over the launcher's lifetime.
 const MAX_ENTRIES: usize = 500;
 
+/// Entries older than this are dropped too, regardless of count - same
+/// reasoning as sync_log.rs's own cutoff: this is a "what just went wrong"
+/// aid, not a permanent history.
+const MAX_AGE_MS: i64 = 7 * 24 * 60 * 60 * 1000;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DebugLogEntry {
@@ -36,16 +41,19 @@ fn debug_log_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir.join("debug.json"))
 }
 
-/// Newest first. An unreadable/missing/corrupt file is treated as empty
-/// rather than an error - this is a diagnostic aid, not something that
-/// should ever block startup or a command.
+/// Newest first, with anything older than MAX_AGE_MS already dropped. An
+/// unreadable/missing/corrupt file is treated as empty rather than an
+/// error - this is a diagnostic aid, not something that should ever block
+/// startup or a command.
 pub fn load_debug_log(app: &AppHandle) -> Result<Vec<DebugLogEntry>, String> {
     let path = debug_log_path(app)?;
     if !path.exists() {
         return Ok(Vec::new());
     }
     let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    Ok(serde_json::from_str(&raw).unwrap_or_default())
+    let entries: Vec<DebugLogEntry> = serde_json::from_str(&raw).unwrap_or_default();
+    let cutoff = crate::sync_log::now_ms() - MAX_AGE_MS;
+    Ok(entries.into_iter().filter(|e| e.at >= cutoff).collect())
 }
 
 /// Errors reading/writing the log itself are swallowed on purpose - a
@@ -76,6 +84,11 @@ pub fn error(app: &AppHandle, context: &str, message: &str) {
 pub fn warn(app: &AppHandle, context: &str, message: &str) {
     log::warn!("[{context}] {message}");
     append(app, "warn", context, message);
+}
+
+pub fn info(app: &AppHandle, context: &str, message: &str) {
+    log::info!("[{context}] {message}");
+    append(app, "info", context, message);
 }
 
 /// Logs `result`'s Err (if any) under `context` before returning it
