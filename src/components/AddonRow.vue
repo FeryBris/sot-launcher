@@ -18,7 +18,11 @@ const status = computed<'synced' | 'pending' | 'removing' | 'off'>(() => {
     const upToDate = !!installed.value && installed.value.filesPresent && installed.value.sha256 === props.addon.sha256
     return upToDate ? 'synced' : 'pending'
   }
-  return installed.value ? 'removing' : 'off'
+  // installed.value can still be truthy for an addon that's ALREADY been
+  // moved to Interface/.DisabledAddons (its state entry just carries
+  // disabled: true rather than disappearing) - only a still-active entry
+  // (not yet moved) is actually "will disable" on the next sync.
+  return installed.value && !installed.value.disabled ? 'removing' : 'off'
 })
 
 // Only worth calling out when they actually disagree — most addons keep these in sync.
