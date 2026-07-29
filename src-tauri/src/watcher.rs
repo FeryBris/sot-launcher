@@ -29,7 +29,10 @@ pub fn watch_guild_data(app: &AppHandle, game_path: &Path) {
         *guard = None;
     }
 
-    if !accounts_dir.exists() {
+    let virtualstore_dir = crate::virtualstore::virtualstore_mirror(&accounts_dir);
+    let has_real = accounts_dir.exists();
+    let has_virtualstore = virtualstore_dir.as_deref().is_some_and(Path::exists);
+    if !has_real && !has_virtualstore {
         return;
     }
 
@@ -41,8 +44,26 @@ pub fn watch_guild_data(app: &AppHandle, game_path: &Path) {
             return;
         }
     };
-    if let Err(e) = watcher.watch(&accounts_dir, RecursiveMode::Recursive) {
-        log::warn!("failed to watch {}: {e}", accounts_dir.display());
+
+    let mut watched_any = false;
+    if has_real {
+        match watcher.watch(&accounts_dir, RecursiveMode::Recursive) {
+            Ok(()) => watched_any = true,
+            Err(e) => log::warn!("failed to watch {}: {e}", accounts_dir.display()),
+        }
+    }
+    // WoW's own writes under this folder can be silently redirected here by
+    // Windows' UAC virtualization (see virtualstore.rs) when it's running
+    // non-elevated from under Program Files - watching only the real path
+    // would then never see any of its actual saves at all.
+    if has_virtualstore {
+        let dir = virtualstore_dir.expect("has_virtualstore implies Some");
+        match watcher.watch(&dir, RecursiveMode::Recursive) {
+            Ok(()) => watched_any = true,
+            Err(e) => log::warn!("failed to watch {}: {e}", dir.display()),
+        }
+    }
+    if !watched_any {
         return;
     }
 

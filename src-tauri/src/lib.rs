@@ -9,6 +9,7 @@ mod settings;
 mod sync;
 mod sync_log;
 mod types;
+mod virtualstore;
 mod watcher;
 mod wtf_sync;
 

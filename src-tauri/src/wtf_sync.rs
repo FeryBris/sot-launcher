@@ -40,19 +40,19 @@ fn is_synced_file(file_name: &str) -> bool {
 
 /// Every `WTF/Account/*` subfolder — a single WoW install can have several
 /// (shared PC, multiple accounts), so the player picks theirs explicitly
-/// in Settings rather than this guessing.
+/// in Settings rather than this guessing. Merges in names that only exist
+/// under the account folder's VirtualStore mirror (see virtualstore.rs) —
+/// an account WoW has only ever written to while running virtualized
+/// wouldn't show up here at all otherwise, since the real folder may
+/// never have been created.
 pub fn list_wtf_accounts(game_path: &str) -> Vec<String> {
     let dir = PathBuf::from(game_path).join("WTF").join("Account");
-    let mut names: Vec<String> = std::fs::read_dir(&dir)
-        .map(|entries| {
-            entries
-                .flatten()
-                .filter(|e| e.path().is_dir())
-                .filter_map(|e| e.file_name().to_str().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default();
+    let mut names: Vec<String> = crate::virtualstore::list_dirs_merged(&dir)
+        .iter()
+        .filter_map(|p| p.file_name().and_then(|n| n.to_str()).map(str::to_string))
+        .collect();
     names.sort();
+    names.dedup();
     names
 }
 
@@ -62,12 +62,19 @@ pub fn list_wtf_accounts(game_path: &str) -> Vec<String> {
 /// bug) could set it to something like "../../Interface" and PathBuf::join
 /// won't sanitize that away, so it's rejected explicitly here rather than
 /// trusted.
+///
+/// Always returns the real (non-virtualized) path, even when only the
+/// account's VirtualStore mirror actually exists — every caller of this
+/// (collect_files et al.) resolves the real/mirror split for individual
+/// files/folders on its own, so this only needs to confirm the account
+/// exists *somewhere*.
 pub fn account_dir(game_path: &str, account: &str) -> Result<PathBuf, String> {
     if account.is_empty() || account.contains(['/', '\\']) || account == "." || account == ".." {
         return Err("invalid WTF account name".to_string());
     }
     let dir = PathBuf::from(game_path).join("WTF").join("Account").join(account);
-    if !dir.is_dir() {
+    let exists_virtualized = crate::virtualstore::virtualstore_mirror(&dir).is_some_and(|m| m.is_dir());
+    if !dir.is_dir() && !exists_virtualized {
         return Err(format!("WTF/Account/{account} not found — pick a valid account folder in Settings"));
     }
     Ok(dir)
@@ -75,11 +82,49 @@ pub fn account_dir(game_path: &str, account: &str) -> Result<PathBuf, String> {
 
 /// Every included file under `dir`, as (path relative to dir with forward
 /// slashes, absolute path), sorted for a stable fingerprint/zip order.
+/// Merges in `dir`'s VirtualStore mirror (see virtualstore.rs) if one
+/// exists — an account can end up with some files real and others
+/// virtualized (e.g. after a Windows update changed how it's run), so
+/// relying on only one location risks silently backing up/fingerprinting
+/// an incomplete snapshot. Where the same relative path exists in both,
+/// whichever copy was modified more recently wins.
 fn collect_files(dir: &Path) -> Result<Vec<(String, PathBuf)>, String> {
-    let mut out = Vec::new();
-    collect_files_inner(dir, dir, &mut out)?;
+    let mut by_rel: std::collections::HashMap<String, PathBuf> = std::collections::HashMap::new();
+    // dir itself may not exist at all when the account is entirely
+    // virtualized (account_dir() explicitly allows that) - read_dir'ing a
+    // missing folder would otherwise error out before ever getting a
+    // chance to check the mirror below.
+    if dir.is_dir() {
+        merge_files_from(dir, &mut by_rel)?;
+    }
+    if let Some(mirror) = crate::virtualstore::virtualstore_mirror(dir) {
+        if mirror.is_dir() {
+            merge_files_from(&mirror, &mut by_rel)?;
+        }
+    }
+
+    let mut out: Vec<(String, PathBuf)> = by_rel.into_iter().collect();
     out.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(out)
+}
+
+fn merge_files_from(root: &Path, by_rel: &mut std::collections::HashMap<String, PathBuf>) -> Result<(), String> {
+    let mut found = Vec::new();
+    collect_files_inner(root, root, &mut found)?;
+    for (rel, path) in found {
+        let candidate_is_newer = match by_rel.get(&rel) {
+            Some(existing) => {
+                let existing_mtime = std::fs::metadata(existing).and_then(|m| m.modified()).ok();
+                let candidate_mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+                candidate_mtime > existing_mtime
+            }
+            None => true,
+        };
+        if candidate_is_newer {
+            by_rel.insert(rel, path);
+        }
+    }
+    Ok(())
 }
 
 fn collect_files_inner(root: &Path, current: &Path, out: &mut Vec<(String, PathBuf)>) -> Result<(), String> {
@@ -159,17 +204,29 @@ pub fn zip_account(dir: &Path) -> Result<Vec<u8>, String> {
     Ok(buf)
 }
 
-/// Extracts `bytes` into a temp folder first and only swaps it into
-/// `dir`'s place once every entry has been written successfully — a
-/// partial extraction straight into `dir` on failure (a bad chunk, a full
-/// disk) would leave the player's real settings half-overwritten with no
-/// way back.
+/// Extracts `bytes` into a temp folder first and only swaps it into the
+/// target folder's place once every entry has been written successfully —
+/// a partial extraction straight into the target on failure (a bad chunk,
+/// a full disk) would leave the player's real settings half-overwritten
+/// with no way back.
+///
+/// If this account is already virtualized (its VirtualStore mirror
+/// exists, meaning WoW's own writes for it are landing there rather than
+/// under `dir` — see virtualstore.rs), restores go there instead: once
+/// virtualization is active for a path, Windows always serves reads from
+/// the mirror first, so restoring only to the real `dir` would leave WoW
+/// reading its old data as if nothing had changed.
 pub fn extract_account_zip(bytes: &[u8], dir: &Path) -> Result<(), String> {
+    let target_dir = match crate::virtualstore::virtualstore_mirror(dir) {
+        Some(mirror) if mirror.is_dir() => mirror,
+        _ => dir.to_path_buf(),
+    };
+
     let tmp_name = format!(
         ".wtfsync-tmp-{}",
-        dir.file_name().and_then(|n| n.to_str()).unwrap_or("account")
+        target_dir.file_name().and_then(|n| n.to_str()).unwrap_or("account")
     );
-    let tmp_dir = dir.with_file_name(tmp_name);
+    let tmp_dir = target_dir.with_file_name(tmp_name);
     if tmp_dir.exists() {
         std::fs::remove_dir_all(&tmp_dir).map_err(|e| e.to_string())?;
     }
@@ -181,10 +238,10 @@ pub fn extract_account_zip(bytes: &[u8], dir: &Path) -> Result<(), String> {
         return Err(e);
     }
 
-    if dir.exists() {
-        std::fs::remove_dir_all(dir).map_err(|e| e.to_string())?;
+    if target_dir.exists() {
+        std::fs::remove_dir_all(&target_dir).map_err(|e| e.to_string())?;
     }
-    std::fs::rename(&tmp_dir, dir).map_err(|e| e.to_string())
+    std::fs::rename(&tmp_dir, &target_dir).map_err(|e| e.to_string())
 }
 
 fn extract_into(bytes: &[u8], dest_dir: &Path) -> Result<(), String> {

@@ -9,13 +9,19 @@ use std::time::SystemTime;
 /// folder for the given addon SavedVariables file and returns whichever was
 /// written most recently (i.e. whichever account the player actually just
 /// played). Shared by every addon this launcher reads SavedVariables from.
+///
+/// Both the account list and each candidate file go through virtualstore.rs
+/// - on Windows, an account installed under Program Files and run without
+/// admin rights has its actual writes silently redirected by UAC to a
+/// hidden per-user shadow copy instead of showing up at the path below, so
+/// resolving only the literal configured path would see stale or missing
+/// data despite the game genuinely having saved something moments ago.
 pub fn find_saved_variables_file(game_path: &Path, file_name: &str) -> Option<PathBuf> {
     let accounts_dir = game_path.join("WTF").join("Account");
-    let entries = fs::read_dir(&accounts_dir).ok()?;
 
     let mut newest: Option<(PathBuf, SystemTime)> = None;
-    for entry in entries.flatten() {
-        let candidate = entry.path().join("SavedVariables").join(file_name);
+    for account_dir in crate::virtualstore::list_dirs_merged(&accounts_dir) {
+        let candidate = crate::virtualstore::resolve_read_path(&account_dir.join("SavedVariables").join(file_name));
         let Ok(metadata) = fs::metadata(&candidate) else {
             continue;
         };
