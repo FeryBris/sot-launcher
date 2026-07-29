@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub struct AddonEntry {
     pub name: String,
+    #[serde(default)]
+    pub description: String,
     pub version: String,
     pub url: String,
     pub sha256: String,
@@ -127,6 +129,12 @@ pub struct Settings {
     /// Wall-clock ms of the last successful push or pull, for display only.
     #[serde(default)]
     pub wtf_last_synced_at: Option<i64>,
+    /// When on, debug_log::verbose() calls actually persist to debug.json
+    /// instead of being dropped — see that function's doc comment. Off by
+    /// default since most players never need to see "every action", just
+    /// errors (which always log regardless of this).
+    #[serde(default)]
+    pub verbose_logging: bool,
 }
 
 fn default_true() -> bool {

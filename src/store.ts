@@ -76,6 +76,7 @@ export const store = reactive<Store>({
     wtfSyncAutoPull: false,
     wtfSyncAutoPush: false,
     wtfLastSyncedAt: null,
+    verboseLogging: false,
   },
   apiBaseUrl: '',
   manifest: null,
@@ -527,6 +528,10 @@ export async function saveCloseToTray(enabled: boolean) {
 
 export async function saveAutoLaunch(enabled: boolean) {
   store.settings = await api.setAutoLaunch(enabled)
+}
+
+export async function saveVerboseLogging(enabled: boolean) {
+  store.settings = await api.setVerboseLogging(enabled)
 }
 
 /** Whether an addon should be active, applying category defaults when the user hasn't overridden it. */

@@ -91,6 +91,20 @@ pub fn info(app: &AppHandle, context: &str, message: &str) {
     append(app, "info", context, message);
 }
 
+/// Same as `info`, except it only persists to debug.json when the player
+/// has turned on Settings > "log everything" (verbose_logging) — for the
+/// "what is the launcher actually doing" breadcrumbs sprinkled across
+/// nearly every command, which would otherwise flood the file for the vast
+/// majority of players who never asked for that much detail. Always still
+/// goes to the dev console log like the other levels; `error`/`warn`
+/// (and `info`'s own sparing, deliberate uses) stay unconditional.
+pub fn verbose(app: &AppHandle, context: &str, message: &str) {
+    log::info!("[{context}] {message}");
+    if crate::settings::load_settings(app).map(|s| s.verbose_logging).unwrap_or(false) {
+        append(app, "info", context, message);
+    }
+}
+
 /// Logs `result`'s Err (if any) under `context` before returning it
 /// unchanged - lets a command log its own outward-facing failure in one
 /// place rather than duplicating a log call at every internal `?` that

@@ -56,6 +56,7 @@ async function onDelete() {
       <input type="checkbox" :checked="wanted" :disabled="locked" @change="onToggle" />
       <div>
         <div class="name">{{ addon.name }}</div>
+        <div v-if="addon.description" class="description">{{ addon.description }}</div>
         <div class="meta">
           v{{ addon.version }}
           <span v-if="installedVersionMismatch" class="version-diff">(installed: v{{ installed?.version }})</span>
@@ -97,6 +98,13 @@ async function onDelete() {
 .name {
   font-size: 13px;
   font-weight: 500;
+}
+
+.description {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 2px;
+  line-height: 1.4;
 }
 
 .meta {

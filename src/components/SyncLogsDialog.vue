@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import * as api from '../api'
+import { store, saveVerboseLogging } from '../store'
 import type { SyncLogEntry } from '../types'
 
 const emit = defineEmits<{ close: [] }>()
@@ -29,6 +30,10 @@ function formatTime(at: number): string {
 
 function kindLabel(kind: SyncLogEntry['kind']): string {
   return kind === 'characters' ? 'Character Data' : kind === 'guild-roster' ? 'Guild Roster' : kind
+}
+
+async function onVerboseLoggingChange(e: Event) {
+  await saveVerboseLogging((e.target as HTMLInputElement).checked)
 }
 </script>
 
@@ -68,6 +73,19 @@ function kindLabel(kind: SyncLogEntry['kind']): string {
           </div>
         </template>
       </div>
+
+      <label class="checkbox-row">
+        <input
+          type="checkbox"
+          :checked="store.settings.verboseLogging"
+          @change="onVerboseLoggingChange"
+        />
+        Log everything the launcher does to debug.log (not just errors)
+      </label>
+      <p class="hint">
+        Useful when troubleshooting an issue with support — leave this off otherwise, since it
+        makes debug.log noisier.
+      </p>
 
       <div class="actions">
         <button class="btn" @click="emit('close')">Close</button>
@@ -224,6 +242,23 @@ function kindLabel(kind: SyncLogEntry['kind']): string {
   font-size: 11px;
   color: var(--danger);
   word-break: break-word;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text);
+  margin-top: 16px;
+  cursor: pointer;
+}
+
+.checkbox-row input[type='checkbox'] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  flex-shrink: 0;
 }
 
 .actions {

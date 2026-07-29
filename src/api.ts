@@ -57,6 +57,10 @@ export function setAutoLaunch(enabled: boolean): Promise<Settings> {
   return invoke('set_auto_launch', { enabled })
 }
 
+export function setVerboseLogging(enabled: boolean): Promise<Settings> {
+  return invoke('set_verbose_logging', { enabled })
+}
+
 export function pickGameFolder(): Promise<string | null> {
   return invoke('pick_game_folder')
 }

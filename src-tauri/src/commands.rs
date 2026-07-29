@@ -69,22 +69,24 @@ pub fn get_settings(app: AppHandle) -> Result<Settings, String> {
 #[tauri::command]
 pub fn set_game_path_windows(app: AppHandle, path: String) -> Result<Settings, String> {
     let mut s = settings::load_settings(&app)?;
-    s.game_path_windows = Some(path);
+    s.game_path_windows = Some(path.clone());
     settings::save_settings(&app, &s)?;
     if let Some(current) = s.game_path() {
         crate::watcher::watch_guild_data(&app, Path::new(&current));
     }
+    crate::debug_log::verbose(&app, "set_game_path_windows", &format!("game folder set to {path}"));
     Ok(s)
 }
 
 #[tauri::command]
 pub fn set_game_path_linux(app: AppHandle, path: String) -> Result<Settings, String> {
     let mut s = settings::load_settings(&app)?;
-    s.game_path_linux = Some(path);
+    s.game_path_linux = Some(path.clone());
     settings::save_settings(&app, &s)?;
     if let Some(current) = s.game_path() {
         crate::watcher::watch_guild_data(&app, Path::new(&current));
     }
+    crate::debug_log::verbose(&app, "set_game_path_linux", &format!("game folder set to {path}"));
     Ok(s)
 }
 
@@ -121,6 +123,7 @@ pub fn set_launch_command(app: AppHandle, command: String) -> Result<Settings, S
     let trimmed = command.trim();
     s.launch_command = if trimmed.is_empty() { None } else { Some(trimmed.to_string()) };
     settings::save_settings(&app, &s)?;
+    crate::debug_log::verbose(&app, "set_launch_command", &format!("custom launch command set to {:?}", s.launch_command));
     Ok(s)
 }
 
@@ -129,6 +132,7 @@ pub fn set_hide_on_launch(app: AppHandle, enabled: bool) -> Result<Settings, Str
     let mut s = settings::load_settings(&app)?;
     s.hide_on_launch = enabled;
     settings::save_settings(&app, &s)?;
+    crate::debug_log::verbose(&app, "set_hide_on_launch", &format!("set to {enabled}"));
     Ok(s)
 }
 
@@ -137,6 +141,7 @@ pub fn set_close_to_tray(app: AppHandle, enabled: bool) -> Result<Settings, Stri
     let mut s = settings::load_settings(&app)?;
     s.close_to_tray = enabled;
     settings::save_settings(&app, &s)?;
+    crate::debug_log::verbose(&app, "set_close_to_tray", &format!("set to {enabled}"));
     Ok(s)
 }
 
@@ -144,6 +149,15 @@ pub fn set_close_to_tray(app: AppHandle, enabled: bool) -> Result<Settings, Stri
 pub fn set_auto_launch(app: AppHandle, enabled: bool) -> Result<Settings, String> {
     let mut s = settings::load_settings(&app)?;
     s.auto_launch = enabled;
+    settings::save_settings(&app, &s)?;
+    crate::debug_log::verbose(&app, "set_auto_launch", &format!("set to {enabled}"));
+    Ok(s)
+}
+
+#[tauri::command]
+pub fn set_verbose_logging(app: AppHandle, enabled: bool) -> Result<Settings, String> {
+    let mut s = settings::load_settings(&app)?;
+    s.verbose_logging = enabled;
     settings::save_settings(&app, &s)?;
     Ok(s)
 }
@@ -158,12 +172,20 @@ pub async fn pick_game_folder(app: AppHandle) -> Result<Option<String>, String> 
             let _ = tx.send(folder);
         });
     let picked = rx.recv().map_err(|e| e.to_string())?;
-    Ok(picked.map(|p| p.to_string()))
+    let picked = picked.map(|p| p.to_string());
+    match &picked {
+        Some(p) => crate::debug_log::verbose(&app, "pick_game_folder", &format!("picked {p}")),
+        None => crate::debug_log::verbose(&app, "pick_game_folder", "picker cancelled"),
+    }
+    Ok(picked)
 }
 
 #[tauri::command]
 pub async fn fetch_manifest(app: AppHandle, state: State<'_, AppState>) -> Result<Manifest, String> {
     let result = fetch_manifest_inner(&state).await;
+    if let Ok(m) = &result {
+        crate::debug_log::verbose(&app, "fetch_manifest", &format!("fetched {} addons, {} wtf files", m.addons.len(), m.wtf_files.len()));
+    }
     crate::debug_log::log_on_err(&app, "fetch_manifest", result)
 }
 
@@ -202,6 +224,7 @@ pub fn set_addon_disabled(app: AppHandle, manifest: Manifest, name: String, disa
     let s = settings::load_settings(&app)?;
     let game_path = s.game_path().ok_or_else(|| "no game folder configured".to_string())?;
     sync::set_addon_disabled(&game_path, &name, disabled)?;
+    crate::debug_log::verbose(&app, "set_addon_disabled", &format!("{name}: disabled={disabled}"));
     Ok(sync::get_installed_state(&game_path, &manifest))
 }
 
@@ -217,11 +240,12 @@ pub fn delete_addon(app: AppHandle, manifest: Manifest, name: String) -> Result<
 
     if let Some(removed) = sync::delete_addon(&game_path, &name)? {
         if removed.kind != "custom" {
-            s.addon_enabled.insert(name, false);
+            s.addon_enabled.insert(name.clone(), false);
             settings::save_settings(&app, &s)?;
         }
     }
 
+    crate::debug_log::verbose(&app, "delete_addon", &format!("{name}: moved to trash"));
     Ok(sync::get_installed_state(&game_path, &manifest))
 }
 
@@ -233,6 +257,7 @@ pub fn delete_addon_forever(app: AppHandle, manifest: Manifest, name: String) ->
     let s = settings::load_settings(&app)?;
     let game_path = s.game_path().ok_or_else(|| "no game folder configured".to_string())?;
     sync::delete_addon_forever(&game_path, &name)?;
+    crate::debug_log::verbose(&app, "delete_addon_forever", &format!("{name}: purged"));
     Ok(sync::get_installed_state(&game_path, &manifest))
 }
 
@@ -247,6 +272,7 @@ pub fn restore_addon(app: AppHandle, manifest: Manifest, name: String, force: bo
     let s = settings::load_settings(&app)?;
     let game_path = s.game_path().ok_or_else(|| "no game folder configured".to_string())?;
     sync::restore_addon(&game_path, &name, force)?;
+    crate::debug_log::verbose(&app, "restore_addon", &format!("{name}: restored (force={force})"));
     Ok(sync::get_installed_state(&game_path, &manifest))
 }
 
@@ -283,6 +309,9 @@ pub async fn sync_guild_data_to_web(app: AppHandle, state: State<'_, AppState>) 
         error: result.as_ref().err().cloned(),
         raid_id: None,
     });
+    if result.is_ok() {
+        crate::debug_log::verbose(&app, "sync_guild_data_to_web", "synced character data to web");
+    }
     crate::debug_log::log_on_err(&app, "sync_guild_data_to_web", result)
 }
 
@@ -345,6 +374,9 @@ pub async fn sync_guild_roster_to_web(app: AppHandle, state: State<'_, AppState>
         error: result.as_ref().err().cloned(),
         raid_id: None,
     });
+    if result.is_ok() {
+        crate::debug_log::verbose(&app, "sync_guild_roster_to_web", "synced guild roster to web");
+    }
     crate::debug_log::log_on_err(&app, "sync_guild_roster_to_web", result)
 }
 
@@ -467,7 +499,11 @@ pub fn get_captured_raids(app: AppHandle) -> Result<Vec<SyncableRaid>, String> {
 /// launcher install, doesn't touch anything on the website.
 #[tauri::command]
 pub fn set_raid_ignored(app: AppHandle, raid_id: String, ignored: bool) -> Result<(), String> {
-    crate::ignored_raids::set_raid_ignored(&app, &raid_id, ignored)
+    let result = crate::ignored_raids::set_raid_ignored(&app, &raid_id, ignored);
+    if result.is_ok() {
+        crate::debug_log::verbose(&app, "set_raid_ignored", &format!("raid {raid_id}: ignored={ignored}"));
+    }
+    result
 }
 
 #[derive(serde::Serialize)]
@@ -500,9 +536,12 @@ pub async fn sync_raid_to_web(
         kind: "raid".to_string(),
         success: result.is_ok(),
         error: result.as_ref().err().cloned(),
-        raid_id: Some(raid_id),
+        raid_id: Some(raid_id.clone()),
     });
 
+    if result.is_ok() {
+        crate::debug_log::verbose(&app, "sync_raid_to_web", &format!("synced raid {raid_id} to web (is_main={is_main})"));
+    }
     crate::debug_log::log_on_err(&app, "sync_raid_to_web", result)
 }
 
@@ -551,6 +590,9 @@ async fn sync_raid_to_web_inner(
 #[tauri::command]
 pub async fn get_my_loot(app: AppHandle, state: State<'_, AppState>) -> Result<serde_json::Value, String> {
     let result = get_my_loot_inner(&app, &state).await;
+    if result.is_ok() {
+        crate::debug_log::verbose(&app, "get_my_loot", "fetched my loot from web");
+    }
     crate::debug_log::log_on_err(&app, "get_my_loot", result)
 }
 
@@ -627,6 +669,9 @@ pub async fn exchange_pair_code(
 #[tauri::command]
 pub async fn pair_with_code(app: AppHandle, state: State<'_, AppState>, code: String) -> Result<Settings, String> {
     let result = exchange_pair_code(&app, &state.http, code).await;
+    if let Ok(s) = &result {
+        crate::debug_log::verbose(&app, "pair_with_code", &format!("paired as {:?}", s.discord_username));
+    }
     crate::debug_log::log_on_err(&app, "pair_with_code", result)
 }
 
@@ -652,6 +697,7 @@ pub async fn clear_discord_login(app: AppHandle, state: State<'_, AppState>) -> 
     s.discord_avatar = None;
     s.is_officer = false;
     settings::save_settings(&app, &s)?;
+    crate::debug_log::verbose(&app, "clear_discord_login", "signed out of discord");
     Ok(s)
 }
 
@@ -690,6 +736,17 @@ async fn run_sync_inner(
     s.addon_enabled = addon_enabled;
     settings::save_settings(app, &s)?;
 
+    crate::debug_log::verbose(
+        app,
+        "run_sync",
+        &format!(
+            "synced {} addons ({} failed), {} wtf files ({} failed)",
+            addons.updated.len(),
+            addons.failed.len(),
+            wtf_files.updated.len(),
+            wtf_files.failed.len(),
+        ),
+    );
     Ok(CombinedSyncResult { addons, wtf_files })
 }
 
@@ -787,6 +844,7 @@ fn launch_game_inner(app: &AppHandle) -> Result<(), String> {
     if s.wtf_sync_auto_push && s.wtf_sync_account.is_some() && s.discord_token.as_deref().is_some_and(|t| !t.is_empty()) {
         crate::wtf_sync::watch_for_game_close(app.clone());
     }
+    crate::debug_log::verbose(app, "launch_game", "launched the game");
     Ok(())
 }
 
@@ -925,6 +983,7 @@ pub fn set_wtf_sync_account(app: AppHandle, account: Option<String>) -> Result<S
     s.wtf_last_known_remote_updated_at = None;
     s.wtf_last_synced_at = None;
     settings::save_settings(&app, &s)?;
+    crate::debug_log::verbose(&app, "set_wtf_sync_account", &format!("wtf sync account set to {:?}", s.wtf_sync_account));
     Ok(s)
 }
 
@@ -933,6 +992,7 @@ pub fn set_wtf_sync_auto_pull(app: AppHandle, enabled: bool) -> Result<Settings,
     let mut s = settings::load_settings(&app)?;
     s.wtf_sync_auto_pull = enabled;
     settings::save_settings(&app, &s)?;
+    crate::debug_log::verbose(&app, "set_wtf_sync_auto_pull", &format!("set to {enabled}"));
     Ok(s)
 }
 
@@ -941,6 +1001,7 @@ pub fn set_wtf_sync_auto_push(app: AppHandle, enabled: bool) -> Result<Settings,
     let mut s = settings::load_settings(&app)?;
     s.wtf_sync_auto_push = enabled;
     settings::save_settings(&app, &s)?;
+    crate::debug_log::verbose(&app, "set_wtf_sync_auto_push", &format!("set to {enabled}"));
     Ok(s)
 }
 
@@ -1033,6 +1094,7 @@ async fn wtf_push_inner(app: &AppHandle, state: &State<'_, AppState>, force: boo
     s.wtf_last_known_remote_updated_at = status.updated_at;
     s.wtf_last_synced_at = Some(crate::sync_log::now_ms());
     settings::save_settings(app, &s)?;
+    crate::debug_log::verbose(app, "wtf_push", &format!("pushed wtf folder to cloud (force={force})"));
     Ok(s)
 }
 
@@ -1093,5 +1155,6 @@ async fn wtf_pull_inner(app: &AppHandle, state: &State<'_, AppState>, force: boo
     s.wtf_last_known_remote_updated_at = status.updated_at;
     s.wtf_last_synced_at = Some(crate::sync_log::now_ms());
     settings::save_settings(app, &s)?;
+    crate::debug_log::verbose(app, "wtf_pull", &format!("pulled wtf folder from cloud (force={force})"));
     Ok(s)
 }

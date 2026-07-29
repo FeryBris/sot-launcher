@@ -2,6 +2,7 @@ export type AddonCategory = 'mandatory' | 'recommended' | 'optional'
 
 export interface AddonEntry {
   name: string
+  description: string
   version: string
   url: string
   sha256: string
@@ -50,6 +51,9 @@ export interface Settings {
   wtfSyncAutoPush: boolean
   /** ms epoch of the last successful push or pull, for display only. */
   wtfLastSyncedAt: number | null
+  /** When on, debug.json records every action the launcher takes, not just
+   *  errors — see Settings > Sync Logs' "Log everything" checkbox. */
+  verboseLogging: boolean
 }
 
 /** The paired user's personal WTF cloud backup state — distinct from

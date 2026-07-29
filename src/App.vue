@@ -1,127 +1,145 @@
 <script setup lang="ts">
-import { onMounted, ref, shallowRef, watch } from 'vue'
-import { check as checkForUpdate, type Update } from '@tauri-apps/plugin-updater'
-import { relaunch } from '@tauri-apps/plugin-process'
-import { getVersion } from '@tauri-apps/api/app'
-import HomeView from './views/Home.vue'
-import AddonsView from './views/Addons.vue'
-import RaidsView from './views/Raids.vue'
-import SettingsView from './views/Settings.vue'
-import PlayBar from './components/PlayBar.vue'
-import ConfirmDialog from './components/ConfirmDialog.vue'
-import { init as initStore, playNow, signInWithDiscord, store } from './store'
-import { isSelfUpdateSupported, logClientEvent, onTrayPrimaryClicked, openLauncherDownloadPage, setTrayPrimaryLabel } from './api'
+import { onMounted, ref, shallowRef, watch } from 'vue';
+import { check as checkForUpdate, type Update } from '@tauri-apps/plugin-updater';
+import { relaunch } from '@tauri-apps/plugin-process';
+import { getVersion } from '@tauri-apps/api/app';
+import HomeView from './views/Home.vue';
+import AddonsView from './views/Addons.vue';
+import RaidsView from './views/Raids.vue';
+import SettingsView from './views/Settings.vue';
+import PlayBar from './components/PlayBar.vue';
+import ConfirmDialog from './components/ConfirmDialog.vue';
+import logo from './assets/logo.png';
+import { init as initStore, playNow, signInWithDiscord, store } from './store';
+import {
+  isSelfUpdateSupported,
+  logClientEvent,
+  onTrayPrimaryClicked,
+  openLauncherDownloadPage,
+  setTrayPrimaryLabel,
+} from './api';
 
-type Tab = 'home' | 'addons' | 'raids' | 'settings'
+type Tab = 'home' | 'addons' | 'raids' | 'settings';
 
-const tab = ref<Tab>('home')
-const appVersion = ref('')
+const tab = ref<Tab>('home');
+const appVersion = ref('');
 
 // False for a Linux install that isn't an AppImage (.deb/.rpm/pacman) —
 // downloadAndInstall() can't replace a binary under /usr/bin there, so
 // those users get a link to the download page instead of an install button.
-const selfUpdateSupported = ref(true)
+const selfUpdateSupported = ref(true);
 
-const updateAvailable = shallowRef<Update | null>(null)
-const updateState = ref<'idle' | 'checking' | 'downloading' | 'ready' | 'error'>('idle')
-const updateError = ref('')
-const updateProgress = ref(0)
+const updateAvailable = shallowRef<Update | null>(null);
+const updateState = ref<'idle' | 'checking' | 'downloading' | 'ready' | 'error'>('idle');
+const updateError = ref('');
+const updateProgress = ref(0);
 
 /** Best-effort breadcrumb into debug.json — logClientEvent's own Rust side
  *  already swallows its errors, but the IPC call itself could still reject
  *  (e.g. mid-teardown), and a logging hiccup must never break the update
  *  flow it's trying to observe. */
 function logUpdateEvent(level: 'error' | 'info', message: string) {
-  logClientEvent(level, 'launcher_update', message).catch(() => {})
+  logClientEvent(level, 'launcher_update', message).catch(() => {});
 }
 
 async function checkUpdate() {
-  updateState.value = 'checking'
+  updateState.value = 'checking';
   try {
-    const update = await checkForUpdate()
+    const update = await checkForUpdate();
     if (update?.available) {
-      updateAvailable.value = update
-      updateState.value = 'idle'
+      updateAvailable.value = update;
+      updateState.value = 'idle';
     } else {
-      updateState.value = 'idle'
+      updateState.value = 'idle';
     }
   } catch (e) {
-    console.error('[updater] check failed:', e)
-    logUpdateEvent('error', `check failed: ${e}`)
-    updateState.value = 'error'
-    updateError.value = String(e)
+    console.error('[updater] check failed:', e);
+    logUpdateEvent('error', `check failed: ${e}`);
+    updateState.value = 'error';
+    updateError.value = String(e);
   }
 }
 
 async function installUpdate() {
-  if (!updateAvailable.value) return
+  if (!updateAvailable.value) return;
   if (!selfUpdateSupported.value) {
-    void openLauncherDownloadPage(store.apiBaseUrl)
-    return
+    void openLauncherDownloadPage(store.apiBaseUrl);
+    return;
   }
-  updateState.value = 'downloading'
-  let downloaded = 0
-  let total = 0
+  updateState.value = 'downloading';
+  let downloaded = 0;
+  let total = 0;
   try {
     await updateAvailable.value.downloadAndInstall((event) => {
       if (event.event === 'Started') {
-        total = event.data.contentLength ?? 0
+        total = event.data.contentLength ?? 0;
       } else if (event.event === 'Progress') {
-        downloaded += event.data.chunkLength
-        updateProgress.value = total > 0 ? Math.round((downloaded / total) * 100) : 0
+        downloaded += event.data.chunkLength;
+        updateProgress.value = total > 0 ? Math.round((downloaded / total) * 100) : 0;
       } else if (event.event === 'Finished') {
-        updateProgress.value = 100
+        updateProgress.value = 100;
       }
-    })
-    updateState.value = 'ready'
+    });
+    updateState.value = 'ready';
     // Windows' update handoff exits this process so the installer can
     // replace its files, whether or not that installer is actually allowed
     // to run under strict AppLocker/WDAC policies — if this is the last
     // entry debug.json ever gets, that silence is itself the diagnosis.
-    await logClientEvent('info', 'launcher_update', 'install downloaded, relaunching to hand off to installer').catch(() => {})
-    await relaunch()
+    await logClientEvent(
+      'info',
+      'launcher_update',
+      'install downloaded, relaunching to hand off to installer'
+    ).catch(() => {});
+    await relaunch();
   } catch (e) {
-    console.error('[updater] install failed:', e)
-    logUpdateEvent('error', `install failed: ${e}`)
-    updateState.value = 'error'
-    updateError.value = String(e)
+    console.error('[updater] install failed:', e);
+    logUpdateEvent('error', `install failed: ${e}`);
+    updateState.value = 'error';
+    updateError.value = String(e);
   }
 }
 
 // Mirrors update-availability onto the native tray menu's first item —
 // the tray itself has no idea whether an update exists, it just relays
 // whatever this side decides.
-watch(updateAvailable, (val) => {
-  void setTrayPrimaryLabel(val ? 'Update' : 'Play')
-}, { immediate: true })
+watch(
+  updateAvailable,
+  (val) => {
+    void setTrayPrimaryLabel(val ? 'Update' : 'Play');
+  },
+  { immediate: true }
+);
 
 // The Raids tab (and its nav button) only render for officers — if that
 // stops being true mid-session (e.g. sign-out), fall back off a tab that
 // no longer has anything to show instead of leaving the content area blank.
-watch(() => store.settings.isOfficer, (isOfficer) => {
-  if (!isOfficer && tab.value === 'raids') {
-    tab.value = 'home'
+watch(
+  () => store.settings.isOfficer,
+  (isOfficer) => {
+    if (!isOfficer && tab.value === 'raids') {
+      tab.value = 'home';
+    }
   }
-})
+);
 
 onMounted(async () => {
-  appVersion.value = await getVersion()
-  await initStore()
-  selfUpdateSupported.value = await isSelfUpdateSupported()
-  checkUpdate()
+  appVersion.value = await getVersion();
+  await initStore();
+  selfUpdateSupported.value = await isSelfUpdateSupported();
+  checkUpdate();
 
   await onTrayPrimaryClicked(() => {
     if (updateAvailable.value) {
-      installUpdate()
+      installUpdate();
     } else {
-      playNow()
+      playNow();
     }
-  })
+  });
 
   if (store.settings.autoLaunch) {
-    playNow()
+    playNow();
   }
-})
+});
 </script>
 
 <template>
@@ -129,15 +147,19 @@ onMounted(async () => {
     <aside class="sidebar">
       <div class="brand">
         <div class="brand-row">
-          <span class="brand-mark">SoT</span>
+          <img class="brand-mark" :src="logo" alt="" />
           <span class="brand-name">Launcher</span>
         </div>
         <div class="version">v{{ appVersion }}</div>
       </div>
 
       <nav class="nav">
-        <button class="nav-item" :class="{ active: tab === 'home' }" @click="tab = 'home'">Home</button>
-        <button class="nav-item" :class="{ active: tab === 'addons' }" @click="tab = 'addons'">Addons</button>
+        <button class="nav-item" :class="{ active: tab === 'home' }" @click="tab = 'home'">
+          Home
+        </button>
+        <button class="nav-item" :class="{ active: tab === 'addons' }" @click="tab = 'addons'">
+          Addons
+        </button>
         <button
           v-if="store.settings.isOfficer"
           class="nav-item"
@@ -146,23 +168,29 @@ onMounted(async () => {
         >
           Raids
         </button>
-        <button class="nav-item" :class="{ active: tab === 'settings' }" @click="tab = 'settings'">Settings</button>
+        <button class="nav-item" :class="{ active: tab === 'settings' }" @click="tab = 'settings'">
+          Settings
+        </button>
       </nav>
 
       <div class="sidebar-footer">
         <div v-if="updateAvailable" class="update-banner">
-          <div class="update-text">
-            Update {{ updateAvailable.version }} available
-          </div>
+          <div class="update-text">Update {{ updateAvailable.version }} available</div>
           <button
             class="update-btn"
             :disabled="updateState === 'downloading'"
             @click="installUpdate"
           >
             <template v-if="!selfUpdateSupported">Download update</template>
-            <template v-else>{{ updateState === 'downloading' ? `Updating ${updateProgress}%` : 'Update & Restart' }}</template>
+            <template v-else>{{
+              updateState === 'downloading' ? `Updating ${updateProgress}%` : 'Update & Restart'
+            }}</template>
           </button>
-          <div v-if="selfUpdateSupported && updateState === 'error'" class="update-install-error" :title="updateError">
+          <div
+            v-if="selfUpdateSupported && updateState === 'error'"
+            class="update-install-error"
+            :title="updateError"
+          >
             Update failed — try again
           </div>
         </div>
@@ -173,7 +201,12 @@ onMounted(async () => {
           Guild server error — check Settings
         </div>
         <div v-if="store.settings.discordToken" class="discord-status">
-          <img v-if="store.settings.discordAvatar" class="discord-avatar" :src="store.settings.discordAvatar" alt="" />
+          <img
+            v-if="store.settings.discordAvatar"
+            class="discord-avatar"
+            :src="store.settings.discordAvatar"
+            alt=""
+          />
           <span class="discord-name">{{ store.settings.discordUsername }}</span>
         </div>
         <button v-else class="discord-signin-btn" @click="signInWithDiscord">Sign in</button>
@@ -226,13 +259,8 @@ onMounted(async () => {
   width: 30px;
   height: 30px;
   border-radius: 6px;
-  background: linear-gradient(135deg, var(--accent), var(--accent-dim));
-  color: #062028;
-  font-weight: 700;
-  font-size: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  object-fit: cover;
+  flex-shrink: 0;
 }
 
 .brand-name {
@@ -257,7 +285,9 @@ onMounted(async () => {
   border-radius: var(--radius);
   font-size: 13px;
   font-weight: 500;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .nav-item:hover {

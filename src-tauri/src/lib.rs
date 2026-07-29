@@ -56,6 +56,7 @@ fn dispatch_pair_code(app: &tauri::AppHandle, code: String) {
     let http = handle.state::<AppState>().http.clone();
     match commands::exchange_pair_code(&handle, &http, code).await {
       Ok(settings) => {
+        debug_log::verbose(&handle, "discord_pair", &format!("paired as {:?} (via deep link)", settings.discord_username));
         let _ = handle.emit("discord-paired", &settings);
       }
       Err(e) => {
@@ -196,6 +197,7 @@ pub fn run() {
       commands::set_hide_on_launch,
       commands::set_close_to_tray,
       commands::set_auto_launch,
+      commands::set_verbose_logging,
       commands::pick_game_folder,
       commands::fetch_manifest,
       commands::get_installed_state,
