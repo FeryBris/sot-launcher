@@ -113,6 +113,13 @@ jobs:
         if: matrix.platform == 'ubuntu-22.04'
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          # Must be set to *something*, even empty — the CLI's signer sign
+          # subcommand (unlike tauri-action's own build-time signing) falls
+          # back to an interactive password prompt when this is unset at
+          # all, which has no TTY to read from in CI and fails outright
+          # (confirmed locally with a fresh no-password key: "incorrect
+          # updater private key password: No such device or address").
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
