@@ -222,7 +222,7 @@ pub fn run() {
       commands::set_raid_ignored,
       commands::get_my_loot,
       commands::get_wtf_accounts,
-      commands::set_wtf_sync_account,
+      commands::get_wtf_cloud_accounts,
       commands::set_wtf_sync_auto_pull,
       commands::set_wtf_sync_auto_push,
       commands::get_wtf_sync_info,

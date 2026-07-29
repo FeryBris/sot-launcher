@@ -43,14 +43,11 @@ export interface Settings {
   discordAvatar: string | null
   /** Whether the paired Discord user holds officer guild rank, as of the last pairing exchange. */
   isOfficer: boolean
-  /** Which WTF/Account/<name> folder is "yours" — a WoW install can have
-   *  several (shared PC, multiple accounts), so this can't be inferred
-   *  automatically the way the game folder itself can. */
-  wtfSyncAccount: string | null
+  /** Applies to every detected WTF/Account/<name> folder, not just one —
+   *  each account syncs to its own cloud slot rather than picking one as
+   *  "the" account (see the WTF Sync dialog). */
   wtfSyncAutoPull: boolean
   wtfSyncAutoPush: boolean
-  /** ms epoch of the last successful push or pull, for display only. */
-  wtfLastSyncedAt: number | null
   /** When on, debug.json records every action the launcher takes, not just
    *  errors — see Settings > Sync Logs' "Log everything" checkbox. */
   verboseLogging: boolean
@@ -68,6 +65,26 @@ export interface WtfSyncStatus {
 export interface WtfSyncInfo {
   status: WtfSyncStatus
   /** Whether the local account folder has changed since the last successful push/pull. */
+  localChanged: boolean
+}
+
+/** One cloud-known WTF account backup — unlike WtfSyncStatus (one specific
+ *  account's status), this is the full list, so the sync table can offer a
+ *  Pull for an account backed up from another device that hasn't logged
+ *  into this one yet (its WTF/Account/<name> folder wouldn't exist locally). */
+export interface WtfCloudAccountEntry {
+  account: string
+  updatedAt: number | null
+  size: number | null
+}
+
+/** One row in the WTF Sync dialog's table — the union of local folders
+ *  (existsLocally) and cloud backups (status.exists), so an account synced
+ *  from another device but never logged into here still shows up, pullable. */
+export interface WtfAccountRow {
+  account: string
+  existsLocally: boolean
+  status: WtfSyncStatus
   localChanged: boolean
 }
 

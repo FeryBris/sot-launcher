@@ -14,6 +14,7 @@ import type {
   SyncableRaid,
   SyncLogEntry,
   SyncProgress,
+  WtfCloudAccountEntry,
   WtfSyncInfo,
 } from './types'
 
@@ -216,13 +217,16 @@ export function onDiscordPairError(handler: (message: string) => void): Promise<
   return listen<string>('discord-pair-error', (event) => handler(event.payload))
 }
 
-/** Every WTF/Account/* subfolder — for the Settings account picker. */
+/** Every WTF/Account/* subfolder found locally — for the WTF Sync table's
+ *  rows (unioned with getWtfCloudAccounts). */
 export function getWtfAccounts(): Promise<string[]> {
   return invoke('get_wtf_accounts')
 }
 
-export function setWtfSyncAccount(account: string | null): Promise<Settings> {
-  return invoke('set_wtf_sync_account', { account })
+/** Every account this Discord user has a cloud backup for, regardless of
+ *  whether it exists locally on this device. */
+export function getWtfCloudAccounts(): Promise<WtfCloudAccountEntry[]> {
+  return invoke('get_wtf_cloud_accounts')
 }
 
 export function setWtfSyncAutoPull(enabled: boolean): Promise<Settings> {
@@ -233,21 +237,22 @@ export function setWtfSyncAutoPush(enabled: boolean): Promise<Settings> {
   return invoke('set_wtf_sync_auto_push', { enabled })
 }
 
-/** Cloud status + local-change check, without pushing or pulling anything. */
-export function getWtfSyncInfo(): Promise<WtfSyncInfo> {
-  return invoke('get_wtf_sync_info')
+/** Cloud status + local-change check for one account, without pushing or
+ *  pulling anything. */
+export function getWtfSyncInfo(account: string): Promise<WtfSyncInfo> {
+  return invoke('get_wtf_sync_info', { account })
 }
 
 /** `force: true` overwrites the cloud copy even if it changed since this
  *  device last synced it — only pass it after the user has confirmed. */
-export function wtfPush(force: boolean): Promise<Settings> {
-  return invoke('wtf_push', { force })
+export function wtfPush(account: string, force: boolean): Promise<Settings> {
+  return invoke('wtf_push', { account, force })
 }
 
 /** `force: true` overwrites local changes even if they haven't been
  *  pushed yet — only pass it after the user has confirmed. */
-export function wtfPull(force: boolean): Promise<Settings> {
-  return invoke('wtf_pull', { force })
+export function wtfPull(account: string, force: boolean): Promise<Settings> {
+  return invoke('wtf_pull', { account, force })
 }
 
 /** Fires once the game process is seen to exit, if wtfSyncAutoPush was on

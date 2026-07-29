@@ -1,22 +1,25 @@
-//! Personal cross-device sync for a single WTF/Account/<name> folder —
-//! account and character settings (keybinds, macros, chat/UI layout) and
-//! every addon's SavedVariables. Distinct from sync.rs's wtf_files, which
-//! push guild-wide, admin-managed template files one-directionally to
-//! everyone; this is a private, bidirectional backup of one player's own
-//! folder, scoped to the paired Discord user via Sanctum (see the
-//! wtf-sync/* routes on the website).
+//! Personal cross-device sync for WTF/Account/<name> folders — account and
+//! character settings (keybinds, macros, chat/UI layout) and every addon's
+//! SavedVariables. Distinct from sync.rs's wtf_files, which push
+//! guild-wide, admin-managed template files one-directionally to everyone;
+//! this is a private, bidirectional backup of one player's own folders,
+//! scoped to the paired Discord user via Sanctum (see the wtf-sync/* routes
+//! on the website).
 //!
-//! Sync unit is the whole selected account folder, zipped as one blob —
+//! Sync unit is one whole account folder at a time, zipped as one blob —
 //! matches the addon sync's own download+extract-zip shape rather than a
 //! real file-by-file diff engine, which would be a lot more machinery for
-//! a feature most people use one device at a time anyway. Conflict
-//! handling is "warn before overwriting": wtf_push/wtf_pull compare a
-//! cheap fingerprint (path+size+mtime, not full content hashes — fast
-//! enough to run on every launcher open/game close) against what was
-//! recorded at the last successful sync, and refuse (with a message
-//! naming what would be lost) unless `force` is set — see commands.rs.
+//! a feature most people use one device at a time anyway. Each account
+//! syncs to its own cloud slot (see WtfAccountSyncState/commands.rs), so a
+//! single WoW install with several WTF/Account/* folders can back all of
+//! them up independently rather than picking just one. Conflict handling
+//! is "warn before overwriting": wtf_push/wtf_pull compare a cheap
+//! fingerprint (path+size+mtime, not full content hashes — fast enough to
+//! run on every launcher open/game close) against what was recorded at
+//! that account's last successful sync, and refuse (with a message naming
+//! what would be lost) unless `force` is set — see commands.rs.
 
-use crate::types::WtfSyncStatus;
+use crate::types::{WtfCloudAccountEntry, WtfSyncStatus};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
@@ -39,10 +42,10 @@ fn is_synced_file(file_name: &str) -> bool {
 }
 
 /// Every `WTF/Account/*` subfolder — a single WoW install can have several
-/// (shared PC, multiple accounts), so the player picks theirs explicitly
-/// in Settings rather than this guessing. Merges in names that only exist
-/// under the account folder's VirtualStore mirror (see virtualstore.rs) —
-/// an account WoW has only ever written to while running virtualized
+/// (shared PC, multiple accounts), each synced independently (see this
+/// module's doc comment). Merges in names that only exist under the
+/// account folder's VirtualStore mirror (see virtualstore.rs) — an
+/// account WoW has only ever written to while running virtualized
 /// wouldn't show up here at all otherwise, since the real folder may
 /// never have been created.
 pub fn list_wtf_accounts(game_path: &str) -> Vec<String> {
@@ -57,27 +60,41 @@ pub fn list_wtf_accounts(game_path: &str) -> Vec<String> {
 }
 
 /// `account` should always be a plain folder name straight from
-/// list_wtf_accounts (the Settings picker only ever offers those), but it
-/// round-trips through settings.json — a hand-edited file (or a future
-/// bug) could set it to something like "../../Interface" and PathBuf::join
-/// won't sanitize that away, so it's rejected explicitly here rather than
-/// trusted.
-///
+/// list_wtf_accounts (or, for wtf_pull, get_wtf_cloud_accounts) rather than
+/// hand-typed, but it round-trips through settings.json and HTTP requests
+/// either way — a hand-edited file (or a future bug) could set it to
+/// something like "../../Interface" and PathBuf::join won't sanitize that
+/// away, so it's rejected explicitly here rather than trusted.
+fn validate_account_name(account: &str) -> Result<(), String> {
+    if account.is_empty() || account.contains(['/', '\\']) || account == "." || account == ".." {
+        return Err("invalid WTF account name".to_string());
+    }
+    Ok(())
+}
+
 /// Always returns the real (non-virtualized) path, even when only the
 /// account's VirtualStore mirror actually exists — every caller of this
 /// (collect_files et al.) resolves the real/mirror split for individual
 /// files/folders on its own, so this only needs to confirm the account
-/// exists *somewhere*.
+/// exists *somewhere*. Requires the folder to already exist — use
+/// `account_dir_for_pull` for a pull, which can legitimately create one.
 pub fn account_dir(game_path: &str, account: &str) -> Result<PathBuf, String> {
-    if account.is_empty() || account.contains(['/', '\\']) || account == "." || account == ".." {
-        return Err("invalid WTF account name".to_string());
-    }
+    validate_account_name(account)?;
     let dir = PathBuf::from(game_path).join("WTF").join("Account").join(account);
     let exists_virtualized = crate::virtualstore::virtualstore_mirror(&dir).is_some_and(|m| m.is_dir());
     if !dir.is_dir() && !exists_virtualized {
-        return Err(format!("WTF/Account/{account} not found — pick a valid account folder in Settings"));
+        return Err(format!("WTF/Account/{account} not found"));
     }
     Ok(dir)
+}
+
+/// Like `account_dir`, but doesn't require the folder to already exist —
+/// wtf_pull needs this since pulling can legitimately create a brand-new
+/// account folder on this device (e.g. restoring a backup pushed from a
+/// different PC for an account this WoW install has never logged into).
+pub fn account_dir_for_pull(game_path: &str, account: &str) -> Result<PathBuf, String> {
+    validate_account_name(account)?;
+    Ok(PathBuf::from(game_path).join("WTF").join("Account").join(account))
 }
 
 /// Every included file under `dir`, as (path relative to dir with forward
@@ -326,13 +343,15 @@ pub fn watch_for_game_close(app: tauri::AppHandle) {
 
 const WTF_SYNC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
 
-pub async fn upload_wtf_zip(http: &reqwest::Client, token: &str, zip_bytes: Vec<u8>) -> Result<WtfSyncStatus, String> {
+pub async fn upload_wtf_zip(http: &reqwest::Client, token: &str, account: &str, zip_bytes: Vec<u8>) -> Result<WtfSyncStatus, String> {
     let url = format!("{}/wtf-sync/upload", crate::config::API_BASE_URL.trim_end_matches('/'));
     let part = reqwest::multipart::Part::bytes(zip_bytes)
         .file_name("wtf.zip")
         .mime_str("application/zip")
         .map_err(|e| e.to_string())?;
-    let form = reqwest::multipart::Form::new().part("file", part);
+    let form = reqwest::multipart::Form::new()
+        .text("account", account.to_string())
+        .part("file", part);
 
     let resp = http
         .post(&url)
@@ -350,10 +369,11 @@ pub async fn upload_wtf_zip(http: &reqwest::Client, token: &str, zip_bytes: Vec<
     resp.json().await.map_err(|e| e.to_string())
 }
 
-pub async fn download_wtf_zip(http: &reqwest::Client, token: &str) -> Result<Vec<u8>, String> {
+pub async fn download_wtf_zip(http: &reqwest::Client, token: &str, account: &str) -> Result<Vec<u8>, String> {
     let url = format!("{}/wtf-sync/download", crate::config::API_BASE_URL.trim_end_matches('/'));
     let resp = http
         .get(&url)
+        .query(&[("account", account)])
         .timeout(WTF_SYNC_TIMEOUT)
         .bearer_auth(token)
         .header("X-API-KEY", crate::config::API_KEY)
@@ -369,8 +389,28 @@ pub async fn download_wtf_zip(http: &reqwest::Client, token: &str) -> Result<Vec
     resp.bytes().await.map(|b| b.to_vec()).map_err(|e| e.to_string())
 }
 
-pub async fn fetch_wtf_status(http: &reqwest::Client, token: &str) -> Result<WtfSyncStatus, String> {
+pub async fn fetch_wtf_status(http: &reqwest::Client, token: &str, account: &str) -> Result<WtfSyncStatus, String> {
     let url = format!("{}/wtf-sync/status", crate::config::API_BASE_URL.trim_end_matches('/'));
+    let resp = http
+        .get(&url)
+        .query(&[("account", account)])
+        .bearer_auth(token)
+        .header("X-API-KEY", crate::config::API_KEY)
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {} while checking WTF sync status", resp.status()));
+    }
+    resp.json().await.map_err(|e| e.to_string())
+}
+
+/// Every account this Discord user has a cloud backup for — see
+/// WtfCloudAccountEntry's doc comment for why this exists alongside
+/// list_wtf_accounts (local folders) rather than just using that.
+pub async fn fetch_wtf_cloud_accounts(http: &reqwest::Client, token: &str) -> Result<Vec<WtfCloudAccountEntry>, String> {
+    let url = format!("{}/wtf-sync/accounts", crate::config::API_BASE_URL.trim_end_matches('/'));
     let resp = http
         .get(&url)
         .bearer_auth(token)
@@ -380,7 +420,7 @@ pub async fn fetch_wtf_status(http: &reqwest::Client, token: &str) -> Result<Wtf
         .await
         .map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
-        return Err(format!("HTTP {} while checking WTF sync status", resp.status()));
+        return Err(format!("HTTP {} while listing cloud WTF accounts", resp.status()));
     }
     resp.json().await.map_err(|e| e.to_string())
 }

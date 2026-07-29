@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, shallowRef, watch } from 'vue';
+import { onMounted, onUnmounted, ref, shallowRef, watch } from 'vue';
 import { check as checkForUpdate, type Update } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { getVersion } from '@tauri-apps/api/app';
@@ -33,6 +33,12 @@ const updateAvailable = shallowRef<Update | null>(null);
 const updateState = ref<'idle' | 'checking' | 'downloading' | 'ready' | 'error'>('idle');
 const updateError = ref('');
 const updateProgress = ref(0);
+
+// Without this, a launcher left open across a release only learns about it
+// on next restart — most players just leave it running in the tray. 30min
+// catches a new release within a session without hammering the update server.
+const UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000;
+let updateCheckTimer: ReturnType<typeof setInterval> | undefined;
 
 /** Best-effort breadcrumb into debug.json — logClientEvent's own Rust side
  *  already swallows its errors, but the IPC call itself could still reject
@@ -139,6 +145,17 @@ onMounted(async () => {
   if (store.settings.autoLaunch) {
     playNow();
   }
+
+  updateCheckTimer = setInterval(() => {
+    // Don't let a periodic recheck interrupt a download already in flight
+    // or one that's finished and waiting to relaunch.
+    if (updateState.value === 'downloading' || updateState.value === 'ready') return;
+    checkUpdate();
+  }, UPDATE_CHECK_INTERVAL_MS);
+});
+
+onUnmounted(() => {
+  clearInterval(updateCheckTimer);
 });
 </script>
 

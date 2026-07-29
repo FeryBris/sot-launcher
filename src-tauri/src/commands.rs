@@ -841,7 +841,7 @@ fn launch_game_inner(app: &AppHandle) -> Result<(), String> {
     // Only bother watching if there's actually something to do once the
     // game closes — no point polling in the background for a feature the
     // player hasn't opted into.
-    if s.wtf_sync_auto_push && s.wtf_sync_account.is_some() && s.discord_token.as_deref().is_some_and(|t| !t.is_empty()) {
+    if s.wtf_sync_auto_push && s.discord_token.as_deref().is_some_and(|t| !t.is_empty()) {
         crate::wtf_sync::watch_for_game_close(app.clone());
     }
     crate::debug_log::verbose(app, "launch_game", "launched the game");
@@ -962,29 +962,14 @@ pub fn list_lutris_games() -> Result<Vec<crate::types::LutrisGame>, String> {
         .collect())
 }
 
-/// Every `WTF/Account/*` subfolder, for the Settings picker — a single WoW
-/// install can have several, so the player picks theirs explicitly.
+/// Every `WTF/Account/*` subfolder found locally — the sync table's rows
+/// are the union of this and get_wtf_cloud_accounts, since a backup pushed
+/// from another device may not have a local folder here yet.
 #[tauri::command]
 pub fn get_wtf_accounts(app: AppHandle) -> Result<Vec<String>, String> {
     let s = settings::load_settings(&app)?;
     let game_path = s.game_path().ok_or_else(|| "no game folder configured".to_string())?;
     Ok(crate::wtf_sync::list_wtf_accounts(&game_path))
-}
-
-/// Switching accounts invalidates the last-synced bookkeeping — it was
-/// computed against the previous folder's contents and would otherwise
-/// cause a false "no local changes" or "no remote changes" read on the
-/// new one.
-#[tauri::command]
-pub fn set_wtf_sync_account(app: AppHandle, account: Option<String>) -> Result<Settings, String> {
-    let mut s = settings::load_settings(&app)?;
-    s.wtf_sync_account = account.filter(|a| !a.is_empty());
-    s.wtf_last_synced_fingerprint = None;
-    s.wtf_last_known_remote_updated_at = None;
-    s.wtf_last_synced_at = None;
-    settings::save_settings(&app, &s)?;
-    crate::debug_log::verbose(&app, "set_wtf_sync_account", &format!("wtf sync account set to {:?}", s.wtf_sync_account));
-    Ok(s)
 }
 
 #[tauri::command]
@@ -1010,22 +995,41 @@ pub fn set_wtf_sync_auto_push(app: AppHandle, enabled: bool) -> Result<Settings,
 pub struct WtfSyncInfo {
     pub status: crate::types::WtfSyncStatus,
     /// Whether the local account folder has changed since the last
-    /// successful push or pull — drives the Settings UI's "you have
+    /// successful push or pull — drives the sync table's "you have
     /// unsynced local changes" hint, independent of any actual push/pull
     /// attempt (which does its own check server-side-aware of the remote too).
     pub local_changed: bool,
 }
 
-/// Cloud status + local-change check, for the Settings panel to show
-/// "up to date" / "local changes pending" / "cloud has newer changes"
-/// without actually pushing or pulling anything.
+/// Every account this Discord user has a cloud backup for, regardless of
+/// whether it exists locally on this device — see WtfCloudAccountEntry's
+/// doc comment for why the sync table needs this alongside get_wtf_accounts.
 #[tauri::command]
-pub async fn get_wtf_sync_info(app: AppHandle, state: State<'_, AppState>) -> Result<WtfSyncInfo, String> {
-    let result = get_wtf_sync_info_inner(&app, &state).await;
+pub async fn get_wtf_cloud_accounts(app: AppHandle, state: State<'_, AppState>) -> Result<Vec<crate::types::WtfCloudAccountEntry>, String> {
+    let result = get_wtf_cloud_accounts_inner(&app, &state).await;
+    crate::debug_log::log_on_err(&app, "get_wtf_cloud_accounts", result)
+}
+
+async fn get_wtf_cloud_accounts_inner(app: &AppHandle, state: &State<'_, AppState>) -> Result<Vec<crate::types::WtfCloudAccountEntry>, String> {
+    let s = settings::load_settings(app)?;
+    let token = s
+        .discord_token
+        .as_deref()
+        .filter(|t| !t.is_empty())
+        .ok_or_else(|| "sign in with Discord first".to_string())?;
+    crate::wtf_sync::fetch_wtf_cloud_accounts(&state.http, token).await
+}
+
+/// Cloud status + local-change check for one account, for the sync table to
+/// show "up to date" / "local changes pending" / "cloud has newer changes"
+/// per row without actually pushing or pulling anything.
+#[tauri::command]
+pub async fn get_wtf_sync_info(app: AppHandle, state: State<'_, AppState>, account: String) -> Result<WtfSyncInfo, String> {
+    let result = get_wtf_sync_info_inner(&app, &state, &account).await;
     crate::debug_log::log_on_err(&app, "get_wtf_sync_info", result)
 }
 
-async fn get_wtf_sync_info_inner(app: &AppHandle, state: &State<'_, AppState>) -> Result<WtfSyncInfo, String> {
+async fn get_wtf_sync_info_inner(app: &AppHandle, state: &State<'_, AppState>, account: &str) -> Result<WtfSyncInfo, String> {
     let s = settings::load_settings(app)?;
     let token = s
         .discord_token
@@ -1033,37 +1037,32 @@ async fn get_wtf_sync_info_inner(app: &AppHandle, state: &State<'_, AppState>) -
         .filter(|t| !t.is_empty())
         .ok_or_else(|| "sign in with Discord first".to_string())?;
 
-    let status = crate::wtf_sync::fetch_wtf_status(&state.http, token).await?;
+    let status = crate::wtf_sync::fetch_wtf_status(&state.http, token, account).await?;
 
-    let local_changed = match (s.game_path(), s.wtf_sync_account.as_deref()) {
-        (Some(game_path), Some(account)) => crate::wtf_sync::account_dir(&game_path, account)
-            .ok()
-            .and_then(|dir| crate::wtf_sync::fingerprint_account(&dir).ok())
-            .map(|fp| Some(fp) != s.wtf_last_synced_fingerprint)
-            .unwrap_or(false),
-        _ => false,
-    };
+    let known_fingerprint = s.wtf_account_sync.get(account).and_then(|a| a.last_synced_fingerprint.clone());
+    let local_changed = s
+        .game_path()
+        .and_then(|game_path| crate::wtf_sync::account_dir(&game_path, account).ok())
+        .and_then(|dir| crate::wtf_sync::fingerprint_account(&dir).ok())
+        .map(|fp| Some(fp) != known_fingerprint)
+        .unwrap_or(false);
 
     Ok(WtfSyncInfo { status, local_changed })
 }
 
-/// Zips the selected WTF account folder and uploads it, overwriting
-/// whatever this player previously had stored. Refuses (naming why) unless
-/// `force` is set if the cloud copy changed since this device last touched
-/// it — see wtf_sync.rs's module doc for the conflict model.
+/// Zips `account`'s WTF/Account folder and uploads it, overwriting whatever
+/// this player previously had stored for that account specifically. Refuses
+/// (naming why) unless `force` is set if the cloud copy changed since this
+/// device last touched it — see wtf_sync.rs's module doc for the conflict model.
 #[tauri::command]
-pub async fn wtf_push(app: AppHandle, state: State<'_, AppState>, force: bool) -> Result<Settings, String> {
-    let result = wtf_push_inner(&app, &state, force).await;
+pub async fn wtf_push(app: AppHandle, state: State<'_, AppState>, account: String, force: bool) -> Result<Settings, String> {
+    let result = wtf_push_inner(&app, &state, &account, force).await;
     crate::debug_log::log_on_err(&app, "wtf_push", result)
 }
 
-async fn wtf_push_inner(app: &AppHandle, state: &State<'_, AppState>, force: bool) -> Result<Settings, String> {
+async fn wtf_push_inner(app: &AppHandle, state: &State<'_, AppState>, account: &str, force: bool) -> Result<Settings, String> {
     let mut s = settings::load_settings(app)?;
     let game_path = s.game_path().ok_or_else(|| "no game folder configured".to_string())?;
-    let account = s
-        .wtf_sync_account
-        .clone()
-        .ok_or_else(|| "pick your WTF account folder in Settings first".to_string())?;
     let token = s
         .discord_token
         .clone()
@@ -1074,11 +1073,12 @@ async fn wtf_push_inner(app: &AppHandle, state: &State<'_, AppState>, force: boo
         return Err("close World of Warcraft before syncing your WTF folder".to_string());
     }
 
-    let dir = crate::wtf_sync::account_dir(&game_path, &account)?;
+    let dir = crate::wtf_sync::account_dir(&game_path, account)?;
+    let existing = s.wtf_account_sync.get(account).cloned().unwrap_or_default();
 
     if !force {
-        let remote = crate::wtf_sync::fetch_wtf_status(&state.http, &token).await?;
-        if remote.exists && remote.updated_at != s.wtf_last_known_remote_updated_at {
+        let remote = crate::wtf_sync::fetch_wtf_status(&state.http, &token, account).await?;
+        if remote.exists && remote.updated_at != existing.last_known_remote_updated_at {
             return Err(
                 "Your cloud WTF backup has changed since this device last synced it - pushing now will overwrite it."
                     .to_string(),
@@ -1088,33 +1088,36 @@ async fn wtf_push_inner(app: &AppHandle, state: &State<'_, AppState>, force: boo
 
     let zip = crate::wtf_sync::zip_account(&dir)?;
     let fingerprint = crate::wtf_sync::fingerprint_account(&dir)?;
-    let status = crate::wtf_sync::upload_wtf_zip(&state.http, &token, zip).await?;
+    let status = crate::wtf_sync::upload_wtf_zip(&state.http, &token, account, zip).await?;
 
-    s.wtf_last_synced_fingerprint = Some(fingerprint);
-    s.wtf_last_known_remote_updated_at = status.updated_at;
-    s.wtf_last_synced_at = Some(crate::sync_log::now_ms());
+    s.wtf_account_sync.insert(
+        account.to_string(),
+        crate::types::WtfAccountSyncState {
+            last_synced_fingerprint: Some(fingerprint),
+            last_known_remote_updated_at: status.updated_at,
+            last_synced_at: Some(crate::sync_log::now_ms()),
+        },
+    );
     settings::save_settings(app, &s)?;
-    crate::debug_log::verbose(app, "wtf_push", &format!("pushed wtf folder to cloud (force={force})"));
+    crate::debug_log::verbose(app, "wtf_push", &format!("pushed wtf account {account} to cloud (force={force})"));
     Ok(s)
 }
 
-/// Downloads this player's cloud WTF backup and replaces the selected
-/// account folder's contents with it. Refuses (naming why) unless `force`
-/// is set if the local folder changed since this device last synced —
-/// see wtf_sync.rs's module doc for the conflict model.
+/// Downloads `account`'s cloud WTF backup and replaces that account
+/// folder's local contents with it — creating the folder if this device
+/// has never logged into that account before (see
+/// wtf_sync::account_dir_for_pull). Refuses (naming why) unless `force` is
+/// set if the local folder changed since this device last synced — see
+/// wtf_sync.rs's module doc for the conflict model.
 #[tauri::command]
-pub async fn wtf_pull(app: AppHandle, state: State<'_, AppState>, force: bool) -> Result<Settings, String> {
-    let result = wtf_pull_inner(&app, &state, force).await;
+pub async fn wtf_pull(app: AppHandle, state: State<'_, AppState>, account: String, force: bool) -> Result<Settings, String> {
+    let result = wtf_pull_inner(&app, &state, &account, force).await;
     crate::debug_log::log_on_err(&app, "wtf_pull", result)
 }
 
-async fn wtf_pull_inner(app: &AppHandle, state: &State<'_, AppState>, force: bool) -> Result<Settings, String> {
+async fn wtf_pull_inner(app: &AppHandle, state: &State<'_, AppState>, account: &str, force: bool) -> Result<Settings, String> {
     let mut s = settings::load_settings(app)?;
     let game_path = s.game_path().ok_or_else(|| "no game folder configured".to_string())?;
-    let account = s
-        .wtf_sync_account
-        .clone()
-        .ok_or_else(|| "pick your WTF account folder in Settings first".to_string())?;
     let token = s
         .discord_token
         .clone()
@@ -1125,16 +1128,17 @@ async fn wtf_pull_inner(app: &AppHandle, state: &State<'_, AppState>, force: boo
         return Err("close World of Warcraft before syncing your WTF folder".to_string());
     }
 
-    let dir = crate::wtf_sync::account_dir(&game_path, &account)?;
+    let dir = crate::wtf_sync::account_dir_for_pull(&game_path, account)?;
+    let existing = s.wtf_account_sync.get(account).cloned().unwrap_or_default();
 
     if !force {
         let current_fp = crate::wtf_sync::fingerprint_account(&dir)?;
-        let has_local_changes = match &s.wtf_last_synced_fingerprint {
+        let has_local_changes = match &existing.last_synced_fingerprint {
             Some(known) => &current_fp != known,
             None => crate::wtf_sync::has_any_synced_files(&dir)?,
         };
         if has_local_changes {
-            let message = if s.wtf_last_synced_fingerprint.is_none() {
+            let message = if existing.last_synced_fingerprint.is_none() {
                 "This device has never synced this WTF folder before - pulling now will overwrite its current \
                  contents with the cloud copy."
             } else {
@@ -1145,16 +1149,21 @@ async fn wtf_pull_inner(app: &AppHandle, state: &State<'_, AppState>, force: boo
         }
     }
 
-    let zip = crate::wtf_sync::download_wtf_zip(&state.http, &token).await?;
+    let zip = crate::wtf_sync::download_wtf_zip(&state.http, &token, account).await?;
     crate::wtf_sync::extract_account_zip(&zip, &dir)?;
 
     let fingerprint = crate::wtf_sync::fingerprint_account(&dir)?;
-    let status = crate::wtf_sync::fetch_wtf_status(&state.http, &token).await?;
+    let status = crate::wtf_sync::fetch_wtf_status(&state.http, &token, account).await?;
 
-    s.wtf_last_synced_fingerprint = Some(fingerprint);
-    s.wtf_last_known_remote_updated_at = status.updated_at;
-    s.wtf_last_synced_at = Some(crate::sync_log::now_ms());
+    s.wtf_account_sync.insert(
+        account.to_string(),
+        crate::types::WtfAccountSyncState {
+            last_synced_fingerprint: Some(fingerprint),
+            last_known_remote_updated_at: status.updated_at,
+            last_synced_at: Some(crate::sync_log::now_ms()),
+        },
+    );
     settings::save_settings(app, &s)?;
-    crate::debug_log::verbose(app, "wtf_pull", &format!("pulled wtf folder from cloud (force={force})"));
+    crate::debug_log::verbose(app, "wtf_pull", &format!("pulled wtf account {account} from cloud (force={force})"));
     Ok(s)
 }

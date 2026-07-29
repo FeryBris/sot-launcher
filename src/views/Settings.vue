@@ -7,20 +7,19 @@ import {
   saveHideOnLaunch,
   saveGamePath,
   saveLaunchCommand,
-  saveWtfSyncAccount,
   saveWtfSyncAutoPull,
   saveWtfSyncAutoPush,
   signInWithDiscord,
   signOutDiscord,
-  wtfPullWithConfirm,
-  wtfPushWithConfirm,
 } from '../store'
 import { isWindows } from '../platform'
 import * as api from '../api'
 import type { LutrisGame } from '../types'
 import SyncLogsDialog from '../components/SyncLogsDialog.vue'
+import WtfSyncDialog from '../components/WtfSyncDialog.vue'
 
 const showSyncLogs = ref(false)
+const showWtfSync = ref(false)
 
 const launchCmdDraft = ref(store.settings.launchCommand ?? '')
 const launchCmdSaved = ref(false)
@@ -91,28 +90,12 @@ async function onAutoLaunchChange(e: Event) {
   await saveAutoLaunch((e.target as HTMLInputElement).checked)
 }
 
-async function onWtfAccountChange(e: Event) {
-  const value = (e.target as HTMLSelectElement).value
-  await saveWtfSyncAccount(value || null)
-}
-
 async function onWtfAutoPullChange(e: Event) {
   await saveWtfSyncAutoPull((e.target as HTMLInputElement).checked)
 }
 
 async function onWtfAutoPushChange(e: Event) {
   await saveWtfSyncAutoPush((e.target as HTMLInputElement).checked)
-}
-
-function formatWtfTime(at: number | null): string {
-  return at ? new Date(at).toLocaleString() : 'Never'
-}
-
-function formatBytes(size: number | null): string {
-  if (size == null) return ''
-  if (size < 1024) return `${size} B`
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
-  return `${(size / 1024 / 1024).toFixed(1)} MB`
 }
 </script>
 
@@ -238,63 +221,35 @@ function formatBytes(size: number | null): string {
       <label>WTF Folder Sync</label>
       <p class="hint">
         Backs up account/character settings and every addon's saved data (keybinds, macros, chat
-        and UI layout, ElvUI/WeakAuras/DBM profiles, ...) to the cloud so you can bring them to
-        another device. Only the folder picked below syncs — a WoW install can have several
-        accounts under it.
+        and UI layout, ElvUI/WeakAuras/DBM profiles, ...) to the cloud — a WoW install can have
+        several accounts, each synced independently.
       </p>
 
       <div class="row">
-        <select class="path" :value="store.settings.wtfSyncAccount ?? ''" @change="onWtfAccountChange">
-          <option value="">Select an account folder...</option>
-          <option v-for="name in store.wtfAccounts" :key="name" :value="name">{{ name }}</option>
-        </select>
+        <button class="btn" @click="showWtfSync = true">Manage WTF Sync</button>
       </div>
-      <p v-if="store.wtfAccounts.length === 0" class="hint">
-        No WTF/Account folders found yet — log into the game at least once first.
+
+      <label class="checkbox-row">
+        <input
+          type="checkbox"
+          :checked="store.settings.wtfSyncAutoPull"
+          @change="onWtfAutoPullChange"
+        />
+        Automatically pull the latest settings when the launcher opens
+      </label>
+      <label class="checkbox-row">
+        <input
+          type="checkbox"
+          :checked="store.settings.wtfSyncAutoPush"
+          @change="onWtfAutoPushChange"
+        />
+        Automatically push my changes after the game closes
+      </label>
+      <p class="hint">
+        Applies to every account already set up on this device. Both still ask for confirmation if
+        the other side changed since this device's last sync for that account — nothing is ever
+        overwritten silently. World of Warcraft must be closed to sync either way.
       </p>
-
-      <template v-if="store.settings.wtfSyncAccount">
-        <div class="row">
-          <button class="btn" :disabled="store.wtfSyncing" @click="wtfPullWithConfirm">
-            {{ store.wtfSyncing ? 'Working...' : 'Pull from Cloud' }}
-          </button>
-          <button class="btn" :disabled="store.wtfSyncing" @click="wtfPushWithConfirm">
-            {{ store.wtfSyncing ? 'Working...' : 'Push to Cloud' }}
-          </button>
-        </div>
-
-        <p class="hint">
-          Last synced from this device: {{ formatWtfTime(store.settings.wtfLastSyncedAt) }}<br />
-          Cloud backup:
-          <template v-if="store.wtfSyncInfo?.status.exists">
-            {{ formatWtfTime(store.wtfSyncInfo.status.updatedAt) }} ({{ formatBytes(store.wtfSyncInfo.status.size) }})
-          </template>
-          <template v-else>none yet</template>
-          <template v-if="store.wtfSyncInfo?.localChanged"> - you have unsynced local changes</template>
-        </p>
-        <p v-if="store.wtfSyncError" class="hint error">{{ store.wtfSyncError }}</p>
-
-        <label class="checkbox-row">
-          <input
-            type="checkbox"
-            :checked="store.settings.wtfSyncAutoPull"
-            @change="onWtfAutoPullChange"
-          />
-          Automatically pull the latest settings when the launcher opens
-        </label>
-        <label class="checkbox-row">
-          <input
-            type="checkbox"
-            :checked="store.settings.wtfSyncAutoPush"
-            @change="onWtfAutoPushChange"
-          />
-          Automatically push my changes after the game closes
-        </label>
-        <p class="hint">
-          Both still ask for confirmation if the other side changed since this device's last sync
-          — nothing is ever overwritten silently. World of Warcraft must be closed to sync either way.
-        </p>
-      </template>
     </section>
 
     <section class="field">
@@ -309,6 +264,7 @@ function formatBytes(size: number | null): string {
     </section>
 
     <SyncLogsDialog v-if="showSyncLogs" @close="showSyncLogs = false" />
+    <WtfSyncDialog v-if="showWtfSync" @close="showWtfSync = false" />
   </div>
 </template>
 

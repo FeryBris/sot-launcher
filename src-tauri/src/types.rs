@@ -39,6 +39,41 @@ pub struct WtfSyncStatus {
     pub size: Option<i64>,
 }
 
+/// One cloud-known WTF account backup, from GET /wtf-sync/accounts — unlike
+/// WtfSyncStatus (one specific account's status) this is the full list, so
+/// the launcher can offer a Pull for an account backed up from another
+/// device that hasn't logged into this one yet (its WTF/Account/<name>
+/// folder wouldn't exist locally, so list_wtf_accounts() alone can't find it).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WtfCloudAccountEntry {
+    pub account: String,
+    #[serde(default)]
+    pub updated_at: Option<i64>,
+    #[serde(default)]
+    pub size: Option<i64>,
+}
+
+/// Per-account sync bookkeeping — see Settings::wtf_account_sync.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct WtfAccountSyncState {
+    /// Fingerprint (see wtf_sync::fingerprint_account) of the local account
+    /// folder as of the last successful push or pull — compared against the
+    /// current fingerprint to detect local changes made since, so a pull
+    /// can warn before silently discarding them.
+    #[serde(default)]
+    pub last_synced_fingerprint: Option<String>,
+    /// The cloud copy's updatedAt as of the last successful push or pull —
+    /// compared against a fresh status check to detect another device
+    /// having pushed since, so a push can warn before silently overwriting it.
+    #[serde(default)]
+    pub last_known_remote_updated_at: Option<i64>,
+    /// Wall-clock ms of the last successful push or pull, for display only.
+    #[serde(default)]
+    pub last_synced_at: Option<i64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewsItem {
@@ -106,29 +141,19 @@ pub struct Settings {
     /// last pairing exchange — gates the Raids tab/Sync Raid action.
     #[serde(default)]
     pub is_officer: bool,
-    /// Which WTF/Account/<name> folder is "yours" — a single WoW install
-    /// can have several (shared PC, multiple accounts), so this can't be
-    /// inferred automatically the way game_path can.
-    #[serde(default)]
-    pub wtf_sync_account: Option<String>,
+    /// Applies to every detected WTF/Account/<name> folder, not just one —
+    /// a single WoW install can have several (shared PC, multiple
+    /// accounts), and each is synced to its own cloud slot (see
+    /// wtf_account_sync below) rather than picking one as "the" account.
     #[serde(default)]
     pub wtf_sync_auto_pull: bool,
     #[serde(default)]
     pub wtf_sync_auto_push: bool,
-    /// Fingerprint (see wtf_sync::fingerprint_account) of the local account
-    /// folder as of the last successful push or pull — compared against the
-    /// current fingerprint to detect local changes made since, so a pull
-    /// can warn before silently discarding them.
+    /// Per-account sync bookkeeping, keyed by WTF/Account/<name> — lets
+    /// several accounts under the same WoW install each track their own
+    /// last-synced state independently instead of sharing one slot.
     #[serde(default)]
-    pub wtf_last_synced_fingerprint: Option<String>,
-    /// The cloud copy's updatedAt as of the last successful push or pull —
-    /// compared against a fresh status check to detect another device
-    /// having pushed since, so a push can warn before silently overwriting it.
-    #[serde(default)]
-    pub wtf_last_known_remote_updated_at: Option<i64>,
-    /// Wall-clock ms of the last successful push or pull, for display only.
-    #[serde(default)]
-    pub wtf_last_synced_at: Option<i64>,
+    pub wtf_account_sync: std::collections::HashMap<String, WtfAccountSyncState>,
     /// When on, debug_log::verbose() calls actually persist to debug.json
     /// instead of being dropped — see that function's doc comment. Off by
     /// default since most players never need to see "every action", just
