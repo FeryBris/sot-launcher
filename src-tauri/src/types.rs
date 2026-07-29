@@ -309,6 +309,23 @@ pub struct GuildSyncEquipmentItem {
     pub icon: Option<String>,
 }
 
+/// Deliberately not camelCase-renamed, matching GuildSyncGlyphs — the
+/// addon's collectEquipment() writes these 2 keys as snake_case. Equipment
+/// is tied to the active dual-spec loadout the same way talents and glyphs
+/// are (same "can't read the inactive group" server limitation — see
+/// GuildSyncTalents below): a character can gear up differently per spec
+/// (e.g. a tank/DPS Warrior), so first_equipment/second_equipment follow
+/// the identical convention as first_glyphs/second_glyphs — whichever spec
+/// is active gets refreshed, the other slot carries forward its last-known
+/// snapshot.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GuildSyncEquipment {
+    #[serde(default)]
+    pub first_equipment: Vec<GuildSyncEquipmentItem>,
+    #[serde(default)]
+    pub second_equipment: Vec<GuildSyncEquipmentItem>,
+}
+
 /// Deliberately not camelCase-renamed, unlike its sibling structs — the
 /// addon's own collectTalents() emits these 4 keys as snake_case already
 /// (same reasoning as GuildSyncStats below). The camelCase rename that
@@ -570,8 +587,12 @@ pub struct GuildSyncData {
     pub guild_rank_index: Option<i64>,
     pub level: i64,
     pub gold: i64,
+    // Older SavedVariables entries (written before dual-spec equipment
+    // existed) won't have a "equipment" key shaped like this at all —
+    // default to empty rather than failing to deserialize the whole
+    // character.
     #[serde(default)]
-    pub equipment: Vec<GuildSyncEquipmentItem>,
+    pub equipment: GuildSyncEquipment,
     pub talents: GuildSyncTalents,
     // Older SavedVariables entries (written before this field existed)
     // won't have a "glyphs" key at all — default to empty instead of

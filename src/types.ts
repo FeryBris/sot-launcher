@@ -160,6 +160,18 @@ export interface GuildSyncEquipmentItem {
   icon: string | null
 }
 
+/** Deliberately not camelCase, matching GuildSyncGlyphs — equipment is tied
+ *  to the active dual-spec loadout the same way talents and glyphs are
+ *  (same "can't read the inactive group" server limitation): a character
+ *  can gear up differently per spec, so first_equipment/second_equipment
+ *  follow the identical convention as first_glyphs/second_glyphs —
+ *  whichever spec is active gets refreshed, the other slot carries
+ *  forward its last-known snapshot. */
+export interface GuildSyncEquipment {
+  first_equipment: GuildSyncEquipmentItem[]
+  second_equipment: GuildSyncEquipmentItem[]
+}
+
 /** Deliberately not camelCase — the addon's own collectTalents() writes
  *  these 4 fields as snake_case already, unlike the rest of GuildSyncData
  *  (matches the Rust side's GuildSyncTalents, which isn't renamed either).
@@ -388,7 +400,7 @@ export interface GuildSyncData {
   guildRankIndex: number | null
   level: number
   gold: number
-  equipment: GuildSyncEquipmentItem[]
+  equipment: GuildSyncEquipment
   talents: GuildSyncTalents
   glyphs: GuildSyncGlyphs
   honorableKills: number
