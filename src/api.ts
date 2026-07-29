@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { open } from '@tauri-apps/plugin-shell'
 import type {
   CombinedSyncResult,
+  DebugLogEntry,
   GuildRosterData,
   GuildSyncData,
   InstalledState,
@@ -117,6 +118,12 @@ export function syncGuildRosterToWeb(): Promise<void> {
 /** Newest first — see Settings > Sync Logs. */
 export function getSyncLog(): Promise<SyncLogEntry[]> {
   return invoke('get_sync_log')
+}
+
+/** Newest first — the persistent error/warning log (debug.json), active
+ *  in every build unlike the dev-only console log. */
+export function getDebugLog(): Promise<DebugLogEntry[]> {
+  return invoke('get_debug_log')
 }
 
 /** Recent raids the SoTRaidLootSync addon has captured, each annotated

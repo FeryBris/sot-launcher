@@ -329,6 +329,18 @@ export interface SyncLogEntry {
   error: string | null
 }
 
+/** One entry from the persistent error/warning log (debug.json) — active
+ *  in every build, unlike the dev-only console log, so this is what
+ *  actually has something in it after a shipped release fails. */
+export interface DebugLogEntry {
+  /** Unix epoch milliseconds. */
+  at: number
+  level: 'error' | 'warn' | 'info'
+  /** Which command/operation this came from, e.g. "wtf_push". */
+  context: string
+  message: string
+}
+
 /** One raid the SoTRaidLootSync addon has captured (recent ones only —
  *  see that addon's own age window). raidJson/lootJson are opaque JSON
  *  strings (HeadCount's and RCLootCouncil's own export formats) — the

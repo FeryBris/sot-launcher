@@ -162,7 +162,12 @@ pub async fn pick_game_folder(app: AppHandle) -> Result<Option<String>, String> 
 }
 
 #[tauri::command]
-pub async fn fetch_manifest(state: State<'_, AppState>) -> Result<Manifest, String> {
+pub async fn fetch_manifest(app: AppHandle, state: State<'_, AppState>) -> Result<Manifest, String> {
+    let result = fetch_manifest_inner(&state).await;
+    crate::debug_log::log_on_err(&app, "fetch_manifest", result)
+}
+
+async fn fetch_manifest_inner(state: &State<'_, AppState>) -> Result<Manifest, String> {
     let url = format!("{}/manifest", crate::config::API_BASE_URL.trim_end_matches('/'));
     let req = state.http.get(&url)
         .header("X-API-KEY", crate::config::API_KEY)
@@ -278,7 +283,7 @@ pub async fn sync_guild_data_to_web(app: AppHandle, state: State<'_, AppState>) 
         error: result.as_ref().err().cloned(),
         raid_id: None,
     });
-    result
+    crate::debug_log::log_on_err(&app, "sync_guild_data_to_web", result)
 }
 
 async fn sync_guild_data_to_web_inner(app: &AppHandle, state: &State<'_, AppState>) -> Result<(), String> {
@@ -340,7 +345,7 @@ pub async fn sync_guild_roster_to_web(app: AppHandle, state: State<'_, AppState>
         error: result.as_ref().err().cloned(),
         raid_id: None,
     });
-    result
+    crate::debug_log::log_on_err(&app, "sync_guild_roster_to_web", result)
 }
 
 async fn sync_guild_roster_to_web_inner(app: &AppHandle, state: &State<'_, AppState>) -> Result<(), String> {
@@ -377,6 +382,14 @@ async fn sync_guild_roster_to_web_inner(app: &AppHandle, state: &State<'_, AppSt
 #[tauri::command]
 pub fn get_sync_log(app: AppHandle) -> Result<Vec<crate::types::SyncLogEntry>, String> {
     crate::sync_log::load_sync_log(&app)
+}
+
+/// Reads the persistent error/warning log (newest first, debug.json in the
+/// app config dir) - active in every build, unlike tauri_plugin_log, so
+/// there's actually something to inspect after a shipped release fails.
+#[tauri::command]
+pub fn get_debug_log(app: AppHandle) -> Result<Vec<crate::debug_log::DebugLogEntry>, String> {
+    crate::debug_log::load_debug_log(&app)
 }
 
 #[derive(serde::Serialize)]
@@ -470,7 +483,7 @@ pub async fn sync_raid_to_web(
         raid_id: Some(raid_id),
     });
 
-    result
+    crate::debug_log::log_on_err(&app, "sync_raid_to_web", result)
 }
 
 async fn sync_raid_to_web_inner(
@@ -517,7 +530,12 @@ async fn sync_raid_to_web_inner(
 /// transformed on the Rust side, just fetched and handed to the frontend.
 #[tauri::command]
 pub async fn get_my_loot(app: AppHandle, state: State<'_, AppState>) -> Result<serde_json::Value, String> {
-    let s = settings::load_settings(&app)?;
+    let result = get_my_loot_inner(&app, &state).await;
+    crate::debug_log::log_on_err(&app, "get_my_loot", result)
+}
+
+async fn get_my_loot_inner(app: &AppHandle, state: &State<'_, AppState>) -> Result<serde_json::Value, String> {
+    let s = settings::load_settings(app)?;
     let token = s
         .discord_token
         .as_deref()
@@ -588,7 +606,8 @@ pub async fn exchange_pair_code(
 
 #[tauri::command]
 pub async fn pair_with_code(app: AppHandle, state: State<'_, AppState>, code: String) -> Result<Settings, String> {
-    exchange_pair_code(&app, &state.http, code).await
+    let result = exchange_pair_code(&app, &state.http, code).await;
+    crate::debug_log::log_on_err(&app, "pair_with_code", result)
 }
 
 /// Best-effort server-side revoke, then always clears the local credential
@@ -622,14 +641,34 @@ pub async fn run_sync(
     manifest: Manifest,
     addon_enabled: std::collections::HashMap<String, bool>,
 ) -> Result<CombinedSyncResult, String> {
-    let mut s = settings::load_settings(&app)?;
+    let result = run_sync_inner(&app, manifest, addon_enabled).await;
+    crate::debug_log::log_on_err(&app, "run_sync", result)
+}
+
+async fn run_sync_inner(
+    app: &AppHandle,
+    manifest: Manifest,
+    addon_enabled: std::collections::HashMap<String, bool>,
+) -> Result<CombinedSyncResult, String> {
+    let mut s = settings::load_settings(app)?;
     let game_path = s.game_path().ok_or_else(|| "no game folder configured".to_string())?;
 
-    let addons = sync::sync_addons(&app, &game_path, &manifest.addons, &addon_enabled).await;
-    let wtf_files = sync::sync_wtf_files(&app, &game_path, &manifest.wtf_files).await;
+    let addons = sync::sync_addons(app, &game_path, &manifest.addons, &addon_enabled).await;
+    let wtf_files = sync::sync_wtf_files(app, &game_path, &manifest.wtf_files).await;
+
+    // Per-item failures (a bad checksum, a dead download URL) don't fail
+    // this whole command - they're already surfaced item-by-item in the
+    // UI - but they're still worth a permanent record when someone reports
+    // "an addon didn't update" days later.
+    for (name, err) in &addons.failed {
+        crate::debug_log::error(app, "sync_addons", &format!("{name}: {err}"));
+    }
+    for (name, err) in &wtf_files.failed {
+        crate::debug_log::error(app, "sync_wtf_files", &format!("{name}: {err}"));
+    }
 
     s.addon_enabled = addon_enabled;
-    settings::save_settings(&app, &s)?;
+    settings::save_settings(app, &s)?;
 
     Ok(CombinedSyncResult { addons, wtf_files })
 }
@@ -675,7 +714,12 @@ fn scan_dir_for_exe(dir: &Path) -> Option<PathBuf> {
 
 #[tauri::command]
 pub fn launch_game(app: AppHandle) -> Result<(), String> {
-    let s = settings::load_settings(&app)?;
+    let result = launch_game_inner(&app);
+    crate::debug_log::log_on_err(&app, "launch_game", result)
+}
+
+fn launch_game_inner(app: &AppHandle) -> Result<(), String> {
+    let s = settings::load_settings(app)?;
     let game_path = s.game_path().ok_or_else(|| "no game folder configured".to_string())?;
     let game_root = PathBuf::from(&game_path);
 
@@ -721,7 +765,7 @@ pub fn launch_game(app: AppHandle) -> Result<(), String> {
     // game closes — no point polling in the background for a feature the
     // player hasn't opted into.
     if s.wtf_sync_auto_push && s.wtf_sync_account.is_some() && s.discord_token.as_deref().is_some_and(|t| !t.is_empty()) {
-        crate::wtf_sync::watch_for_game_close(app);
+        crate::wtf_sync::watch_for_game_close(app.clone());
     }
     Ok(())
 }
@@ -896,7 +940,12 @@ pub struct WtfSyncInfo {
 /// without actually pushing or pulling anything.
 #[tauri::command]
 pub async fn get_wtf_sync_info(app: AppHandle, state: State<'_, AppState>) -> Result<WtfSyncInfo, String> {
-    let s = settings::load_settings(&app)?;
+    let result = get_wtf_sync_info_inner(&app, &state).await;
+    crate::debug_log::log_on_err(&app, "get_wtf_sync_info", result)
+}
+
+async fn get_wtf_sync_info_inner(app: &AppHandle, state: &State<'_, AppState>) -> Result<WtfSyncInfo, String> {
+    let s = settings::load_settings(app)?;
     let token = s
         .discord_token
         .as_deref()
@@ -923,7 +972,12 @@ pub async fn get_wtf_sync_info(app: AppHandle, state: State<'_, AppState>) -> Re
 /// it — see wtf_sync.rs's module doc for the conflict model.
 #[tauri::command]
 pub async fn wtf_push(app: AppHandle, state: State<'_, AppState>, force: bool) -> Result<Settings, String> {
-    let mut s = settings::load_settings(&app)?;
+    let result = wtf_push_inner(&app, &state, force).await;
+    crate::debug_log::log_on_err(&app, "wtf_push", result)
+}
+
+async fn wtf_push_inner(app: &AppHandle, state: &State<'_, AppState>, force: bool) -> Result<Settings, String> {
+    let mut s = settings::load_settings(app)?;
     let game_path = s.game_path().ok_or_else(|| "no game folder configured".to_string())?;
     let account = s
         .wtf_sync_account
@@ -958,7 +1012,7 @@ pub async fn wtf_push(app: AppHandle, state: State<'_, AppState>, force: bool) -
     s.wtf_last_synced_fingerprint = Some(fingerprint);
     s.wtf_last_known_remote_updated_at = status.updated_at;
     s.wtf_last_synced_at = Some(crate::sync_log::now_ms());
-    settings::save_settings(&app, &s)?;
+    settings::save_settings(app, &s)?;
     Ok(s)
 }
 
@@ -968,7 +1022,12 @@ pub async fn wtf_push(app: AppHandle, state: State<'_, AppState>, force: bool) -
 /// see wtf_sync.rs's module doc for the conflict model.
 #[tauri::command]
 pub async fn wtf_pull(app: AppHandle, state: State<'_, AppState>, force: bool) -> Result<Settings, String> {
-    let mut s = settings::load_settings(&app)?;
+    let result = wtf_pull_inner(&app, &state, force).await;
+    crate::debug_log::log_on_err(&app, "wtf_pull", result)
+}
+
+async fn wtf_pull_inner(app: &AppHandle, state: &State<'_, AppState>, force: bool) -> Result<Settings, String> {
+    let mut s = settings::load_settings(app)?;
     let game_path = s.game_path().ok_or_else(|| "no game folder configured".to_string())?;
     let account = s
         .wtf_sync_account
@@ -1013,6 +1072,6 @@ pub async fn wtf_pull(app: AppHandle, state: State<'_, AppState>, force: bool) -
     s.wtf_last_synced_fingerprint = Some(fingerprint);
     s.wtf_last_known_remote_updated_at = status.updated_at;
     s.wtf_last_synced_at = Some(crate::sync_log::now_ms());
-    settings::save_settings(&app, &s)?;
+    settings::save_settings(app, &s)?;
     Ok(s)
 }
