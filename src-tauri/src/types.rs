@@ -404,43 +404,25 @@ pub struct GuildSyncProfessions {
 
 /// Deliberately not camelCase-renamed — the addon writes these keys as
 /// snake_case already (they map 1:1 onto `character_stats`' columns on
-/// the web side), unlike the rest of this payload.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// the web side). Stats are split first_stats/second_stats the same way
+/// GuildSyncTalents/GuildSyncEquipment are (see GuildSyncTalents' doc
+/// comment above) - a character can gear up/talent differently per
+/// dual-spec loadout, so stats are just as spec-dependent.
+///
+/// Untyped serde_json::Value rather than a fixed struct of named fields
+/// (unlike GuildSyncTalents) - this side never reads individual stat
+/// values, only forwards them to the web API as-is, and a fixed struct is
+/// exactly the class of bug that silently emptied out talents before (see
+/// GuildSyncTalents' doc comment): serde_json::from_value doesn't error on
+/// a shape mismatch, it just leaves unmatched Option<T> fields as None, so
+/// this struct going stale after the addon switched to first_stats/
+/// second_stats silently uploaded all-empty stats instead of failing loudly.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GuildSyncStats {
-    pub strength: Option<i64>,
-    pub agility: Option<i64>,
-    pub stamina: Option<i64>,
-    pub intellect: Option<i64>,
-    pub spirit: Option<i64>,
-    pub armor: Option<i64>,
-    pub health: Option<i64>,
-    pub mana: Option<i64>,
-    pub attack_power: Option<i64>,
-    pub melee_crit: Option<f64>,
-    pub melee_haste: Option<f64>,
-    pub melee_hit: Option<f64>,
-    pub expertise: Option<f64>,
-    pub armor_penetration: Option<f64>,
-    pub ranged_attack_power: Option<i64>,
-    pub ranged_crit: Option<f64>,
-    pub ranged_hit: Option<f64>,
-    pub spell_power: Option<i64>,
-    pub spell_crit: Option<f64>,
-    pub spell_haste: Option<f64>,
-    pub spell_hit: Option<f64>,
-    pub spell_penetration: Option<f64>,
-    pub mana_regen: Option<f64>,
-    pub dodge: Option<f64>,
-    pub parry: Option<f64>,
-    pub block: Option<f64>,
-    pub block_value: Option<i64>,
-    pub defense_rating: Option<i64>,
-    pub resilience: Option<f64>,
-    pub resistance_arcane: Option<i64>,
-    pub resistance_fire: Option<i64>,
-    pub resistance_frost: Option<i64>,
-    pub resistance_nature: Option<i64>,
-    pub resistance_shadow: Option<i64>,
+    #[serde(default)]
+    pub first_stats: serde_json::Value,
+    #[serde(default)]
+    pub second_stats: serde_json::Value,
 }
 
 /// One faction row from GetFactionInfo, reported unfiltered — isHeader/
