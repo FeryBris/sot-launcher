@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
-import { PhCloud } from '@phosphor-icons/vue'
+import { computed, ref, watch } from 'vue';
+import { PhCloud } from '@phosphor-icons/vue';
 import {
   store,
   saveAutoLaunch,
@@ -12,91 +12,91 @@ import {
   saveWtfSyncAutoPush,
   signInWithDiscord,
   signOutDiscord,
-} from '../store'
-import { isWindows } from '../platform'
-import * as api from '../api'
-import type { LutrisGame } from '../types'
-import SyncLogsDialog from '../components/SyncLogsDialog.vue'
-import WtfSyncDialog from '../components/WtfSyncDialog.vue'
+} from '../store';
+import { isWindows } from '../platform';
+import * as api from '../api';
+import type { LutrisGame } from '../types';
+import SyncLogsDialog from '../components/SyncLogsDialog.vue';
+import WtfSyncDialog from '../components/WtfSyncDialog.vue';
 
-const showSyncLogs = ref(false)
-const showWtfSync = ref(false)
+const showSyncLogs = ref(false);
+const showWtfSync = ref(false);
 
-const launchCmdDraft = ref(store.settings.launchCommand ?? '')
-const launchCmdSaved = ref(false)
+const launchCmdDraft = ref(store.settings.launchCommand ?? '');
+const launchCmdSaved = ref(false);
 
-const platformTab = ref<'windows' | 'linux'>(isWindows() ? 'windows' : 'linux')
+const platformTab = ref<'windows' | 'linux'>(isWindows() ? 'windows' : 'linux');
 
 /** The folder path for whichever tab is currently selected — not
  *  necessarily the OS actually running this build, since both tabs stay
  *  browsable/editable for reference either way. */
 const currentTabGamePath = computed(() =>
-  platformTab.value === 'windows' ? store.settings.gamePathWindows : store.settings.gamePathLinux,
-)
+  platformTab.value === 'windows' ? store.settings.gamePathWindows : store.settings.gamePathLinux
+);
 
-const lutrisGames = ref<LutrisGame[]>([])
-const lutrisLoading = ref(false)
-const lutrisError = ref('')
+const lutrisGames = ref<LutrisGame[]>([]);
+const lutrisLoading = ref(false);
+const lutrisError = ref('');
 
 watch(
   () => store.settings.launchCommand,
   (v) => {
-    launchCmdDraft.value = v ?? ''
-  },
-)
+    launchCmdDraft.value = v ?? '';
+  }
+);
 
 async function browseGameFolder() {
-  const path = await api.pickGameFolder()
+  const path = await api.pickGameFolder();
   if (path) {
-    await saveGamePath(path, platformTab.value)
+    await saveGamePath(path, platformTab.value);
   }
 }
 
 async function saveLaunchCmd() {
-  await saveLaunchCommand(launchCmdDraft.value.trim())
-  launchCmdSaved.value = true
-  setTimeout(() => (launchCmdSaved.value = false), 1500)
+  await saveLaunchCommand(launchCmdDraft.value.trim());
+  launchCmdSaved.value = true;
+  setTimeout(() => (launchCmdSaved.value = false), 1500);
 }
 
 async function detectLutrisGames() {
-  lutrisLoading.value = true
-  lutrisError.value = ''
-  lutrisGames.value = []
+  lutrisLoading.value = true;
+  lutrisError.value = '';
+  lutrisGames.value = [];
   try {
-    lutrisGames.value = await api.listLutrisGames()
+    lutrisGames.value = await api.listLutrisGames();
     if (lutrisGames.value.length === 0) {
-      lutrisError.value = 'Lutris is installed, but its library is empty.'
+      lutrisError.value = 'Lutris is installed, but its library is empty.';
     }
   } catch (e) {
-    lutrisError.value = String(e)
+    lutrisError.value = String(e);
   } finally {
-    lutrisLoading.value = false
+    lutrisLoading.value = false;
   }
 }
 
 function pickLutrisGame(game: LutrisGame) {
-  launchCmdDraft.value = game.launchCommand
-  lutrisGames.value = []
+  launchCmdDraft.value = game.launchCommand;
+  lutrisGames.value = [];
 }
 
 async function onHideOnLaunchChange(e: Event) {
-  await saveHideOnLaunch((e.target as HTMLInputElement).checked)
+  await saveHideOnLaunch((e.target as HTMLInputElement).checked);
 }
 
 async function onCloseToTrayChange(e: Event) {
-  await saveCloseToTray((e.target as HTMLInputElement).checked)
+  await saveCloseToTray((e.target as HTMLInputElement).checked);
 }
 
 async function onAutoLaunchChange(e: Event) {
-  await saveAutoLaunch((e.target as HTMLInputElement).checked)
+  await saveAutoLaunch((e.target as HTMLInputElement).checked);
 }
 
 async function onWtfAutoPullChange(e: Event) {
-  await saveWtfSyncAutoPull((e.target as HTMLInputElement).checked)
+  await saveWtfSyncAutoPull((e.target as HTMLInputElement).checked);
 }
 
 async function onWtfAutoPushChange(e: Event) {
-  await saveWtfSyncAutoPush((e.target as HTMLInputElement).checked)
+  await saveWtfSyncAutoPush((e.target as HTMLInputElement).checked);
 }
 </script>
 
@@ -106,7 +106,9 @@ async function onWtfAutoPushChange(e: Event) {
 
     <section class="field">
       <label>World of Warcraft folder</label>
-      <p class="hint">Location to your WoW game folder — the one containing <code>Wow.exe</code>.</p>
+      <p class="hint">
+        Location to your WoW game folder — the one containing <code>Wow.exe</code>.
+      </p>
 
       <div class="platform-tabs">
         <button
@@ -147,15 +149,17 @@ async function onWtfAutoPushChange(e: Event) {
               class="path"
               type="text"
               v-model="launchCmdDraft"
-              placeholder='e.g. lutris lutris:rungame/world-of-warcraft'
+              placeholder="e.g. lutris lutris:rungame/world-of-warcraft"
             />
-            <button class="btn" @click="saveLaunchCmd">{{ launchCmdSaved ? 'Saved' : 'Save' }}</button>
+            <button class="btn" @click="saveLaunchCmd">
+              {{ launchCmdSaved ? 'Saved' : 'Save' }}
+            </button>
           </div>
           <p class="hint">
             Leave empty to auto-detect and launch <code>Wow.exe</code> directly (via Wine). If you
             play through Lutris, click "Detect Lutris games" below to pick yours instead of typing a
-            command by hand. Bottles/CrossOver/custom Wine prefixes still need to be entered manually
-            &mdash; <code>{game_path}</code> is replaced with the folder above.
+            command by hand. Bottles/CrossOver/custom Wine prefixes still need to be entered
+            manually &mdash; <code>{game_path}</code> is replaced with the folder above.
           </p>
 
           <div class="row lutris-row">
@@ -195,11 +199,7 @@ async function onWtfAutoPushChange(e: Event) {
         Hide to the system tray when closing the launcher window
       </label>
       <label class="checkbox-row">
-        <input
-          type="checkbox"
-          :checked="store.settings.autoLaunch"
-          @change="onAutoLaunchChange"
-        />
+        <input type="checkbox" :checked="store.settings.autoLaunch" @change="onAutoLaunchChange" />
         Automatically sync and launch when the launcher opens
       </label>
     </section>
@@ -207,7 +207,12 @@ async function onWtfAutoPushChange(e: Event) {
     <section class="field">
       <label>Discord Account</label>
       <div v-if="store.settings.discordToken" class="row discord-row">
-        <img v-if="store.settings.discordAvatar" class="avatar" :src="store.settings.discordAvatar" alt="" />
+        <img
+          v-if="store.settings.discordAvatar"
+          class="avatar"
+          :src="store.settings.discordAvatar"
+          alt=""
+        />
         <span class="discord-name">Connected as {{ store.settings.discordUsername }}</span>
         <button class="btn" @click="signOutDiscord">Disconnect</button>
       </div>
@@ -222,8 +227,8 @@ async function onWtfAutoPushChange(e: Event) {
       <label>Settings Backup</label>
       <p class="hint">
         Backs up your account/character settings and every addon's saved data (keybinds, macros,
-        chat and UI layout, ElvUI/WeakAuras/DBM profiles, ...) to the cloud — a WoW install can
-        have several accounts, each backed up independently.
+        chat and UI layout, ElvUI/WeakAuras/DBM profiles, ...) to the cloud — a WoW install can have
+        several accounts, each backed up independently.
       </p>
 
       <div class="row">
@@ -284,6 +289,8 @@ h1 {
 }
 
 .field {
+  display: grid;
+  gap: 8px;
   margin-bottom: 22px;
 }
 
@@ -294,12 +301,10 @@ label {
   color: var(--text-dim);
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  margin-bottom: 8px;
 }
 
 .row {
   display: flex;
-  gap: 8px;
 }
 
 .path {
