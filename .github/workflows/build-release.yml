@@ -50,15 +50,16 @@ jobs:
         run: pnpm install
 
       # Plain `tauri build`, not tauri-action - this job itself doesn't
-      # publish anywhere (see publish-github-release below for that), it
-      # just needs to produce signed installers. Still needs to be uploaded
-      # through sot.sk's admin panel yourself too (Launcher > Releases >
-      # pick/create the version > Add Platform Artifact) for the in-app
-      # updater to see it - GitHub Releases is a separate, secondary mirror,
-      # nothing reads it for that. createUpdaterArtifacts (tauri.conf.json)
-      # makes this build also emit a .sig next to each platform's designated
-      # update target automatically - see the extra signing step below for
-      # the Linux files that aren't one of those.
+      # publish anywhere, it just needs to produce signed installers. The
+      # resulting artifacts (windows-installers / linux-installers /
+      # linux-arch-package, from build-arch below) still need to be
+      # uploaded through sot.sk's admin panel yourself (Launcher > Releases
+      # > pick/create the version > Import from GitHub Actions) - that's
+      # the only place the in-app updater or the public downloads page
+      # reads from. createUpdaterArtifacts (tauri.conf.json) makes this
+      # build also emit a .sig next to each platform's designated update
+      # target automatically - see the extra signing step below for the
+      # Linux files that aren't one of those.
       - name: Build
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -171,47 +172,3 @@ jobs:
           name: linux-arch-package
           path: packaging/arch/*.pkg.tar.zst
           if-no-files-found: error
-
-  # A secondary mirror/download page only - sot.sk's admin panel is still
-  # the sole source the in-app updater reads from (see the note on the
-  # Build step above), this is just so there's somewhere public to point
-  # people who want to grab a version directly from GitHub, and so past
-  # builds stay easy to find.
-  publish-github-release:
-    needs: [build, build-arch]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v5
-
-      # No `name:` filter - grabs windows-installers, linux-installers, and
-      # linux-arch-package all at once; merge-multiple flattens them into
-      # one directory instead of nesting each under its own artifact-name
-      # subfolder, since none of their filenames collide.
-      - name: Download all build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-
-      - name: Create or update the GitHub Release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
-          TAG="app-v${VERSION}"
-
-          # Re-running this workflow for the same version (e.g. after fixing
-          # a failed leg) should update the existing release's assets, not
-          # fail outright because the tag/release already exists.
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
-          else
-            gh release create "$TAG" dist/* \
-              --repo "$GITHUB_REPOSITORY" \
-              --target "$GITHUB_SHA" \
-              --title "SoT Launcher v${VERSION}" \
-              --notes "See the assets below to download this version."
-          fi

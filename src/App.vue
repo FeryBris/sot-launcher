@@ -203,6 +203,9 @@ onUnmounted(() => {
               updateState === 'downloading' ? `Updating ${updateProgress}%` : 'Update & Restart'
             }}</template>
           </button>
+          <div v-if="!selfUpdateSupported" class="update-notice">
+            This install can't auto-update — opens sot.sk/sot-launcher to download it manually.
+          </div>
           <div
             v-if="selfUpdateSupported && updateState === 'error'"
             class="update-install-error"
@@ -365,6 +368,11 @@ onUnmounted(() => {
   font-size: 11px;
   font-weight: 600;
   color: var(--danger);
+}
+
+.update-notice {
+  font-size: 11px;
+  color: var(--text-dim);
 }
 
 .manifest-error {
