@@ -12,10 +12,6 @@ dist
 dist-ssr
 *.local
 
-# Built installers published by scripts/deploy-build.sh on launcher.sot.sk -
-# generated on the server each deploy, never committed.
-releases/
-
 # Tauri updater signing key (NEVER commit the private key)
 .tauri-keys/*.key
 
