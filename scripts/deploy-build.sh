@@ -25,6 +25,17 @@
 #     if `tauri build` complains it's missing.
 set -euo pipefail
 
+# Ploi's deploy script runs non-interactively, which never sources
+# ~/.bashrc/~/.profile - a plain rustup install (which only wires up PATH
+# via those) would be invisible here even though it works fine over a
+# regular SSH login. Source it directly instead of assuming it's already on
+# PATH; harmless no-op if rustup was never installed at all (this file
+# simply won't exist yet, `cargo`/`rustc` still fail below with a clear error).
+if [ -f "$HOME/.cargo/env" ]; then
+  # shellcheck source=/dev/null
+  source "$HOME/.cargo/env"
+fi
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
