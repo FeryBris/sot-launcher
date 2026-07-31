@@ -311,9 +311,20 @@ pub fn is_wow_running() -> bool {
     if cfg!(target_os = "windows") {
         crate::commands::WOW_EXE_NAMES.iter().any(|name| {
             let filter = format!("IMAGENAME eq {name}");
-            std::process::Command::new("tasklist")
-                .args(["/FI", filter.as_str(), "/NH"])
-                .output()
+            let mut cmd = std::process::Command::new("tasklist");
+            cmd.args(["/FI", filter.as_str(), "/NH"]);
+            // This gets called constantly (every push/pull, plus every 1-5s
+            // while watch_for_game_close polls) - without CREATE_NO_WINDOW,
+            // Windows briefly flashes a console window for every single
+            // call, which is what was showing up as "windows open and
+            // close" during Back Up/Restore and while the game is running.
+            #[cfg(target_os = "windows")]
+            {
+                use std::os::windows::process::CommandExt;
+                const CREATE_NO_WINDOW: u32 = 0x08000000;
+                cmd.creation_flags(CREATE_NO_WINDOW);
+            }
+            cmd.output()
                 .map(|out| String::from_utf8_lossy(&out.stdout).to_lowercase().contains(&name.to_lowercase()))
                 .unwrap_or(false)
         })
@@ -348,16 +359,33 @@ pub fn watch_for_game_close(app: tauri::AppHandle) {
     }
 
     std::thread::spawn(move || {
+        // Waits up to 2 minutes for the game to actually appear running
+        // (slow client boot, patch check, Wine/Lutris startup overhead can
+        // all take a while) - crucially, giving up here must NOT fall
+        // through to the "wait for it to close" loop below, or a
+        // slow-enough start looks identical to "already closed" and fires
+        // an auto-push right after Play was clicked, before the player has
+        // even logged in. Only a confirmed sighting counts as "it ran."
         let start = std::time::Instant::now();
-        while !is_wow_running() && start.elapsed() < std::time::Duration::from_secs(30) {
+        let mut seen_running = false;
+        while start.elapsed() < std::time::Duration::from_secs(120) {
+            if is_wow_running() {
+                seen_running = true;
+                break;
+            }
             std::thread::sleep(std::time::Duration::from_secs(1));
         }
-        while is_wow_running() {
-            std::thread::sleep(std::time::Duration::from_secs(5));
+
+        if seen_running {
+            while is_wow_running() {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+            }
         }
 
         app.state::<crate::commands::AppState>().game_close_watching.store(false, Ordering::SeqCst);
-        let _ = app.emit("game-closed", ());
+        if seen_running {
+            let _ = app.emit("game-closed", ());
+        }
     });
 }
 

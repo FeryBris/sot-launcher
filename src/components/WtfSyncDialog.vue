@@ -9,8 +9,12 @@ onMounted(() => {
   void refreshWtfAccountRows()
 })
 
+// updatedAt comes straight from the API's Storage::lastModified() (see
+// WtfSyncController::statusPayload) - a Unix timestamp in SECONDS, like
+// PHP's filemtime(), not the milliseconds the Date constructor expects.
+// Passing it through unconverted landed every date around 21 Jan 1970.
 function formatTime(at: number | null): string {
-  return at ? new Date(at).toLocaleString() : 'Never'
+  return at ? new Date(at * 1000).toLocaleString() : 'Never'
 }
 
 function formatBytes(size: number | null): string {
