@@ -366,8 +366,8 @@ export interface SyncLogEntry {
  *  in every build, unlike the dev-only console log, so this is what
  *  actually has something in it after a shipped release fails. */
 export interface DebugLogEntry {
-  /** Unix epoch milliseconds. */
-  at: number
+  /** Local time, human-readable (e.g. "2026-07-31 14:32:05"). */
+  at: string
   level: 'error' | 'warn' | 'info'
   /** Which command/operation this came from, e.g. "wtf_push". */
   context: string

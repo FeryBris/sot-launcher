@@ -4,6 +4,7 @@
 //! something to inspect when "it's not working" and there's no dev
 //! console to open. Mirrors sync_log.rs's own JSON-file-of-entries shape.
 
+use chrono::Local;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -18,11 +19,17 @@ const MAX_ENTRIES: usize = 500;
 /// aid, not a permanent history.
 const MAX_AGE_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 
+/// `at` is formatted/parsed with this - fixed so load_debug_log can parse
+/// it back out for the age cutoff below.
+const ENTRY_TIME_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DebugLogEntry {
-    /// Unix epoch milliseconds.
-    pub at: i64,
+    /// Local time, human-readable (e.g. "2026-07-31 14:32:05") - this file
+    /// is opened by hand to see "what just happened", not machine-parsed by
+    /// anything downstream, so a raw epoch-ms timestamp just added friction.
+    pub at: String,
     /// "error" | "warn" | "info"
     pub level: String,
     /// Which command/operation this came from, e.g. "wtf_push",
@@ -41,10 +48,14 @@ fn debug_log_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir.join("debug.json"))
 }
 
-/// Newest first, with anything older than MAX_AGE_MS already dropped. An
+/// Oldest first (file order == chronological order, latest entry at the
+/// bottom), with anything older than MAX_AGE_MS already dropped. An
 /// unreadable/missing/corrupt file is treated as empty rather than an
 /// error - this is a diagnostic aid, not something that should ever block
-/// startup or a command.
+/// startup or a command. An entry whose `at` doesn't parse (a legacy
+/// epoch-ms entry from before this format, or genuine corruption) is kept
+/// rather than silently dropped - this is a "what just happened" aid, so
+/// losing an entry outright is worse than leaving one with an unparsed date.
 pub fn load_debug_log(app: &AppHandle) -> Result<Vec<DebugLogEntry>, String> {
     let path = debug_log_path(app)?;
     if !path.exists() {
@@ -52,8 +63,15 @@ pub fn load_debug_log(app: &AppHandle) -> Result<Vec<DebugLogEntry>, String> {
     }
     let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let entries: Vec<DebugLogEntry> = serde_json::from_str(&raw).unwrap_or_default();
-    let cutoff = crate::sync_log::now_ms() - MAX_AGE_MS;
-    Ok(entries.into_iter().filter(|e| e.at >= cutoff).collect())
+    let cutoff = Local::now() - chrono::Duration::milliseconds(MAX_AGE_MS);
+    Ok(entries
+        .into_iter()
+        .filter(|e| {
+            chrono::NaiveDateTime::parse_from_str(&e.at, ENTRY_TIME_FORMAT)
+                .map(|dt| dt >= cutoff.naive_local())
+                .unwrap_or(true)
+        })
+        .collect())
 }
 
 /// Errors reading/writing the log itself are swallowed on purpose - a
@@ -61,16 +79,17 @@ pub fn load_debug_log(app: &AppHandle) -> Result<Vec<DebugLogEntry>, String> {
 fn append(app: &AppHandle, level: &str, context: &str, message: &str) {
     let Ok(path) = debug_log_path(app) else { return };
     let mut entries = load_debug_log(app).unwrap_or_default();
-    entries.insert(
-        0,
-        DebugLogEntry {
-            at: crate::sync_log::now_ms(),
-            level: level.to_string(),
-            context: context.to_string(),
-            message: message.to_string(),
-        },
-    );
-    entries.truncate(MAX_ENTRIES);
+    entries.push(DebugLogEntry {
+        at: Local::now().format(ENTRY_TIME_FORMAT).to_string(),
+        level: level.to_string(),
+        context: context.to_string(),
+        message: message.to_string(),
+    });
+    // Oldest-first order means the ones to drop once over the cap are at
+    // the FRONT, not the back - drain(..n) keeps the newest MAX_ENTRIES.
+    if entries.len() > MAX_ENTRIES {
+        entries.drain(0..entries.len() - MAX_ENTRIES);
+    }
     if let Ok(raw) = serde_json::to_string_pretty(&entries) {
         let _ = fs::write(&path, raw);
     }
@@ -121,21 +140,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn entries_round_trip_newest_first() {
-        let e1 = DebugLogEntry { at: 1, level: "error".into(), context: "a".into(), message: "first".into() };
-        let e2 = DebugLogEntry { at: 2, level: "warn".into(), context: "b".into(), message: "second".into() };
+    fn entries_append_oldest_first() {
+        let e1 = DebugLogEntry { at: "2026-07-31 10:00:00".into(), level: "error".into(), context: "a".into(), message: "first".into() };
+        let e2 = DebugLogEntry { at: "2026-07-31 10:00:01".into(), level: "warn".into(), context: "b".into(), message: "second".into() };
         let mut entries = vec![e1];
-        entries.insert(0, e2);
-        assert_eq!(entries[0].context, "b");
-        assert_eq!(entries[1].context, "a");
+        entries.push(e2);
+        assert_eq!(entries[0].context, "a");
+        assert_eq!(entries[1].context, "b");
     }
 
     #[test]
-    fn truncates_to_max_entries() {
+    fn truncates_to_max_entries_keeping_the_newest() {
         let mut entries: Vec<DebugLogEntry> = (0..10)
-            .map(|i| DebugLogEntry { at: i, level: "info".into(), context: "x".into(), message: "m".into() })
+            .map(|i| DebugLogEntry { at: format!("entry-{i}"), level: "info".into(), context: "x".into(), message: "m".into() })
             .collect();
-        entries.truncate(5);
+        if entries.len() > 5 {
+            entries.drain(0..entries.len() - 5);
+        }
         assert_eq!(entries.len(), 5);
+        assert_eq!(entries[0].at, "entry-5");
+        assert_eq!(entries[4].at, "entry-9");
     }
 }
