@@ -1,11 +1,19 @@
-name: Build Release (on demand)
+name: Build Release
 
-# No push/tag trigger on purpose - this only runs when someone clicks "Run
-# workflow", so it costs Actions minutes once per release instead of once
-# per push. macOS isn't in the matrix at all (no Apple hardware in this
-# pipeline - dropped from scope, see prior discussion).
+# Runs automatically whenever a version bump lands on main (path-filtered
+# to tauri.conf.json, the version source of truth every bump commit
+# touches - see the version-bump commits' history), plus workflow_dispatch
+# for a manual re-run (e.g. retrying after a fix with no version change).
+# This repo is public, so Actions minutes are unlimited - no cost concern
+# to running on every bump instead of only on demand. macOS isn't in the
+# matrix at all (no Apple hardware in this pipeline - dropped from scope,
+# see prior discussion).
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - src-tauri/tauri.conf.json
 
 jobs:
   build:
