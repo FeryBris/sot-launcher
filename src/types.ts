@@ -45,7 +45,7 @@ export interface Settings {
   isOfficer: boolean
   /** Applies to every detected WTF/Account/<name> folder, not just one —
    *  each account syncs to its own cloud slot rather than picking one as
-   *  "the" account (see the WTF Sync dialog). */
+   *  "the" account (see the Settings Backup dialog). */
   wtfSyncAutoPull: boolean
   wtfSyncAutoPush: boolean
   /** When on, debug.json records every action the launcher takes, not just
@@ -78,7 +78,7 @@ export interface WtfCloudAccountEntry {
   size: number | null
 }
 
-/** One row in the WTF Sync dialog's table — the union of local folders
+/** One row in the Settings Backup dialog's table — the union of local folders
  *  (existsLocally) and cloud backups (status.exists), so an account synced
  *  from another device but never logged into here still shows up, pullable. */
 export interface WtfAccountRow {

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
+import { PhArrowsClockwise, PhCloudArrowDown, PhCloudArrowUp, PhCircleNotch } from '@phosphor-icons/vue'
 import { store, refreshWtfAccountRows, wtfPullWithConfirm, wtfPushWithConfirm } from '../store'
 
 const emit = defineEmits<{ close: [] }>()
@@ -24,28 +25,28 @@ function formatBytes(size: number | null): string {
   <div class="overlay" @click.self="emit('close')">
     <div class="dialog">
       <div class="dialog-header">
-        <h3>WTF Sync</h3>
+        <h3>Settings Backup</h3>
         <button
           class="icon-btn"
           :disabled="store.wtfAccountRowsLoading"
           @click="refreshWtfAccountRows"
           title="Refresh"
         >
-          ⟳
+          <PhArrowsClockwise :size="15" weight="bold" :class="{ spin: store.wtfAccountRowsLoading }" />
         </button>
       </div>
       <p class="hint">
-        Backs up account/character settings and every addon's saved data (keybinds, macros, chat
-        and UI layout, ElvUI/WeakAuras/DBM profiles, ...) to the cloud, per WTF account — a WoW
-        install can have several, each synced independently. Both directions still ask for
-        confirmation if the other side changed since this device's last sync for that account —
-        nothing is ever overwritten silently. World of Warcraft must be closed to sync either way.
+        Backs up your account/character settings and every addon's saved data (keybinds, macros,
+        chat and UI layout, ElvUI/WeakAuras/DBM profiles, ...) to the cloud, per WoW account — one
+        install can have several, each backed up independently. Back Up and Restore both ask for
+        confirmation first if the other side changed since this device's last sync — nothing is
+        ever overwritten silently. World of Warcraft must be closed to back up or restore.
       </p>
 
       <div class="account-list">
         <p v-if="store.wtfAccountRowsLoading" class="empty">Loading…</p>
         <p v-else-if="store.wtfAccountRows.length === 0" class="empty">
-          No WTF accounts found yet — log into the game at least once, or push from another device
+          No accounts found yet — log into the game at least once, or back up from another device
           first.
         </p>
         <template v-else>
@@ -68,18 +69,32 @@ function formatBytes(size: number | null): string {
               <button
                 class="btn"
                 :disabled="!row.existsLocally || store.wtfSyncingAccount === row.account"
-                :title="row.existsLocally ? '' : 'No local folder for this account on this device yet'"
+                :title="row.existsLocally ? 'Upload this device\'s settings to the cloud' : 'No local folder for this account on this device yet'"
                 @click="wtfPushWithConfirm(row.account)"
               >
-                {{ store.wtfSyncingAccount === row.account ? 'Working…' : 'Push' }}
+                <template v-if="store.wtfSyncingAccount === row.account && store.wtfSyncingDirection === 'backup'">
+                  <PhCircleNotch :size="14" weight="bold" class="spin" />
+                  Backing up…
+                </template>
+                <template v-else>
+                  <PhCloudArrowUp :size="14" weight="bold" />
+                  Back Up
+                </template>
               </button>
               <button
                 class="btn"
                 :disabled="!row.status.exists || store.wtfSyncingAccount === row.account"
-                :title="row.status.exists ? '' : 'No cloud backup for this account yet'"
+                :title="row.status.exists ? 'Download the cloud backup to this device' : 'No cloud backup for this account yet'"
                 @click="wtfPullWithConfirm(row.account)"
               >
-                {{ store.wtfSyncingAccount === row.account ? 'Working…' : 'Pull' }}
+                <template v-if="store.wtfSyncingAccount === row.account && store.wtfSyncingDirection === 'restore'">
+                  <PhCircleNotch :size="14" weight="bold" class="spin" />
+                  Restoring…
+                </template>
+                <template v-else>
+                  <PhCloudArrowDown :size="14" weight="bold" />
+                  Restore
+                </template>
               </button>
             </div>
           </div>
@@ -132,14 +147,15 @@ function formatBytes(size: number | null): string {
 }
 
 .icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   color: var(--text-dim);
   border-radius: var(--radius);
   width: 26px;
   height: 26px;
-  font-size: 14px;
-  line-height: 1;
   flex-shrink: 0;
 }
 
@@ -230,6 +246,9 @@ function formatBytes(size: number | null): string {
 }
 
 .btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   color: var(--text);
@@ -241,6 +260,20 @@ function formatBytes(size: number | null): string {
 
 .btn:hover:not(:disabled) {
   border-color: var(--accent-dim);
+}
+
+.spin {
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .btn:disabled {

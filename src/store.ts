@@ -55,11 +55,14 @@ interface Store {
   /** WTF/Account/* subfolders found locally. */
   wtfAccounts: string[]
   /** Union of local folders and cloud backups, each with sync status —
-   *  populated by refreshWtfAccountRows() when the WTF Sync dialog opens. */
+   *  populated by refreshWtfAccountRows() when the Settings Backup dialog opens. */
   wtfAccountRows: WtfAccountRow[]
   wtfAccountRowsLoading: boolean
-  /** Which account (if any) currently has a push/pull in flight. */
+  /** Which account (if any) currently has a backup/restore in flight. */
   wtfSyncingAccount: string | null
+  /** Which direction wtfSyncingAccount's in-flight operation is - lets the
+   *  UI show "Backing up…"/"Restoring…" instead of a generic "Working…". */
+  wtfSyncingDirection: 'backup' | 'restore' | null
   wtfSyncError: string
 }
 
@@ -106,6 +109,7 @@ export const store = reactive<Store>({
   wtfAccountRows: [],
   wtfAccountRowsLoading: false,
   wtfSyncingAccount: null,
+  wtfSyncingDirection: null,
   wtfSyncError: '',
 })
 
@@ -239,7 +243,7 @@ export async function init() {
 
 /** Auto-push/auto-pull apply to every WTF account already known on this
  *  device (not ones only known via a cloud backup from elsewhere - see the
- *  WTF Sync dialog for pulling those down for the first time), one at a
+ *  Settings Backup dialog for pulling those down for the first time), one at a
  *  time so overlapping confirm dialogs (if several happen to conflict at
  *  once) don't stack on top of each other. */
 async function autoSyncAllWtfAccounts(direction: 'push' | 'pull') {
@@ -385,7 +389,7 @@ export async function refreshWtfAccounts() {
   }
 }
 
-/** Builds the WTF Sync dialog's table: the union of locally-found account
+/** Builds the Settings Backup dialog's table: the union of locally-found account
  *  folders and cloud-known backups (an account pushed from another device
  *  may not have a local folder here yet), each with fresh sync status.
  *  Called when the dialog opens (and its own Refresh button) rather than
@@ -439,6 +443,7 @@ export async function saveWtfSyncAutoPush(enabled: boolean) {
  *  callers should use instead of calling this directly. */
 export async function wtfPushNow(account: string, force = false) {
   store.wtfSyncingAccount = account
+  store.wtfSyncingDirection = 'backup'
   store.wtfSyncError = ''
   try {
     store.settings = await api.wtfPush(account, force)
@@ -448,6 +453,7 @@ export async function wtfPushNow(account: string, force = false) {
     throw e
   } finally {
     store.wtfSyncingAccount = null
+    store.wtfSyncingDirection = null
   }
 }
 
@@ -457,6 +463,7 @@ export async function wtfPushNow(account: string, force = false) {
  *  wtfPullWithConfirm. */
 export async function wtfPullNow(account: string, force = false) {
   store.wtfSyncingAccount = account
+  store.wtfSyncingDirection = 'restore'
   store.wtfSyncError = ''
   try {
     store.settings = await api.wtfPull(account, force)
@@ -466,25 +473,26 @@ export async function wtfPullNow(account: string, force = false) {
     throw e
   } finally {
     store.wtfSyncingAccount = null
+    store.wtfSyncingDirection = null
   }
 }
 
-/** One themed confirm dialog for a push that would overwrite newer cloud changes. */
+/** One themed confirm dialog for a backup that would overwrite newer cloud changes. */
 export function confirmWtfPush(account: string, reason: string): Promise<boolean> {
   return requestConfirm({
-    title: `Sync WTF folder — ${account}`,
+    title: `Back up settings — ${account}`,
     message: `${reason}\n\nContinue anyway?`,
-    confirmLabel: 'Push anyway',
+    confirmLabel: 'Back Up Anyway',
     danger: true,
   })
 }
 
-/** One themed confirm dialog for a pull that would overwrite unsynced local changes. */
+/** One themed confirm dialog for a restore that would overwrite unsynced local changes. */
 export function confirmWtfPull(account: string, reason: string): Promise<boolean> {
   return requestConfirm({
-    title: `Sync WTF folder — ${account}`,
+    title: `Restore settings — ${account}`,
     message: `${reason}\n\nContinue anyway?`,
-    confirmLabel: 'Pull anyway',
+    confirmLabel: 'Restore Anyway',
     danger: true,
   })
 }

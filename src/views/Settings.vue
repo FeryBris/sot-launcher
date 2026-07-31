@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { PhCloud } from '@phosphor-icons/vue'
 import {
   store,
   saveAutoLaunch,
@@ -218,15 +219,18 @@ async function onWtfAutoPushChange(e: Event) {
     </section>
 
     <section v-if="store.settings.discordToken" class="field">
-      <label>WTF Folder Sync</label>
+      <label>Settings Backup</label>
       <p class="hint">
-        Backs up account/character settings and every addon's saved data (keybinds, macros, chat
-        and UI layout, ElvUI/WeakAuras/DBM profiles, ...) to the cloud — a WoW install can have
-        several accounts, each synced independently.
+        Backs up your account/character settings and every addon's saved data (keybinds, macros,
+        chat and UI layout, ElvUI/WeakAuras/DBM profiles, ...) to the cloud — a WoW install can
+        have several accounts, each backed up independently.
       </p>
 
       <div class="row">
-        <button class="btn" @click="showWtfSync = true">Manage WTF Sync</button>
+        <button class="btn" @click="showWtfSync = true">
+          <PhCloud :size="15" weight="bold" />
+          Manage Backups
+        </button>
       </div>
 
       <label class="checkbox-row">
@@ -235,7 +239,7 @@ async function onWtfAutoPushChange(e: Event) {
           :checked="store.settings.wtfSyncAutoPull"
           @change="onWtfAutoPullChange"
         />
-        Automatically pull the latest settings when the launcher opens
+        Automatically restore the latest backup when the launcher opens
       </label>
       <label class="checkbox-row">
         <input
@@ -243,12 +247,12 @@ async function onWtfAutoPushChange(e: Event) {
           :checked="store.settings.wtfSyncAutoPush"
           @change="onWtfAutoPushChange"
         />
-        Automatically push my changes after the game closes
+        Automatically back up my changes after the game closes
       </label>
       <p class="hint">
         Applies to every account already set up on this device. Both still ask for confirmation if
         the other side changed since this device's last sync for that account — nothing is ever
-        overwritten silently. World of Warcraft must be closed to sync either way.
+        overwritten silently. World of Warcraft must be closed to back up or restore.
       </p>
     </section>
 
@@ -314,6 +318,9 @@ label {
 }
 
 .btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   background: var(--bg-panel);
   border: 1px solid var(--border);
   color: var(--text);

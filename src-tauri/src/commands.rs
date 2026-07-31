@@ -1082,7 +1082,7 @@ async fn wtf_push_inner(app: &AppHandle, state: &State<'_, AppState>, account: &
         .ok_or_else(|| "sign in with Discord first".to_string())?;
 
     if crate::wtf_sync::is_wow_running() {
-        return Err("close World of Warcraft before syncing your WTF folder".to_string());
+        return Err("close World of Warcraft before backing up or restoring your settings".to_string());
     }
 
     let dir = crate::wtf_sync::account_dir(&game_path, account)?;
@@ -1092,7 +1092,7 @@ async fn wtf_push_inner(app: &AppHandle, state: &State<'_, AppState>, account: &
         let remote = crate::wtf_sync::fetch_wtf_status(&state.http, &token, account).await?;
         if remote.exists && remote.updated_at != existing.last_known_remote_updated_at {
             return Err(
-                "Your cloud WTF backup has changed since this device last synced it - pushing now will overwrite it."
+                "Your cloud backup has changed since this device last backed it up - backing up now will overwrite it."
                     .to_string(),
             );
         }
@@ -1137,7 +1137,7 @@ async fn wtf_pull_inner(app: &AppHandle, state: &State<'_, AppState>, account: &
         .ok_or_else(|| "sign in with Discord first".to_string())?;
 
     if crate::wtf_sync::is_wow_running() {
-        return Err("close World of Warcraft before syncing your WTF folder".to_string());
+        return Err("close World of Warcraft before backing up or restoring your settings".to_string());
     }
 
     let dir = crate::wtf_sync::account_dir_for_pull(&game_path, account)?;
@@ -1151,10 +1151,10 @@ async fn wtf_pull_inner(app: &AppHandle, state: &State<'_, AppState>, account: &
         };
         if has_local_changes {
             let message = if existing.last_synced_fingerprint.is_none() {
-                "This device has never synced this WTF folder before - pulling now will overwrite its current \
+                "This device has never restored this WTF folder before - restoring now will overwrite its current \
                  contents with the cloud copy."
             } else {
-                "You have local WTF changes that haven't been pushed yet - pulling now will overwrite them with \
+                "You have local changes that haven't been backed up yet - restoring now will overwrite them with \
                  the cloud copy."
             };
             return Err(message.to_string());
