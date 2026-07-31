@@ -225,6 +225,7 @@ pub fn run() {
       commands::get_wtf_cloud_accounts,
       commands::set_wtf_sync_auto_pull,
       commands::set_wtf_sync_auto_push,
+      commands::set_wtf_account_auto_sync_enabled,
       commands::get_wtf_sync_info,
       commands::wtf_push,
       commands::wtf_pull,

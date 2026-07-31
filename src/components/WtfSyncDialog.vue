@@ -1,13 +1,29 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
 import { PhArrowsClockwise, PhCloudArrowDown, PhCloudArrowUp, PhCircleNotch } from '@phosphor-icons/vue'
-import { store, refreshWtfAccountRows, wtfPullWithConfirm, wtfPushWithConfirm } from '../store'
+import {
+  store,
+  refreshWtfAccountRows,
+  saveWtfAccountAutoSyncEnabled,
+  wtfPullWithConfirm,
+  wtfPushWithConfirm,
+} from '../store'
 
 const emit = defineEmits<{ close: [] }>()
 
 onMounted(() => {
   void refreshWtfAccountRows()
 })
+
+// No entry yet (never synced) still counts as enabled - matches
+// WtfAccountSyncState.autoSyncEnabled's own true default.
+function isAutoSyncEnabled(account: string): boolean {
+  return store.settings.wtfAccountSync[account]?.autoSyncEnabled !== false
+}
+
+function onAutoSyncToggle(account: string, e: Event) {
+  void saveWtfAccountAutoSyncEnabled(account, (e.target as HTMLInputElement).checked)
+}
 
 // updatedAt comes straight from the API's Storage::lastModified() (see
 // WtfSyncController::statusPayload) - a Unix timestamp in SECONDS, like
@@ -70,6 +86,14 @@ function formatBytes(size: number | null): string {
               </div>
             </div>
             <div class="account-actions">
+              <label class="auto-sync-toggle" title="Include this account in automatic backup/restore (Settings > Automatically back up/restore). Doesn't affect Back Up/Restore below.">
+                <input
+                  type="checkbox"
+                  :checked="isAutoSyncEnabled(row.account)"
+                  @change="onAutoSyncToggle(row.account, $event)"
+                />
+                Auto
+              </label>
               <button
                 class="btn"
                 :disabled="!row.existsLocally || store.wtfSyncingAccount === row.account"
@@ -241,6 +265,15 @@ function formatBytes(size: number | null): string {
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
+}
+
+.auto-sync-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
 }
 
 .actions {

@@ -237,6 +237,10 @@ export function setWtfSyncAutoPush(enabled: boolean): Promise<Settings> {
   return invoke('set_wtf_sync_auto_push', { enabled })
 }
 
+export function setWtfAccountAutoSyncEnabled(account: string, enabled: boolean): Promise<Settings> {
+  return invoke('set_wtf_account_auto_sync_enabled', { account, enabled })
+}
+
 /** Cloud status + local-change check for one account, without pushing or
  *  pulling anything. */
 export function getWtfSyncInfo(account: string): Promise<WtfSyncInfo> {

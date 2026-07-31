@@ -81,6 +81,7 @@ export const store = reactive<Store>({
     isOfficer: false,
     wtfSyncAutoPull: false,
     wtfSyncAutoPush: false,
+    wtfAccountSync: {},
     verboseLogging: false,
   },
   apiBaseUrl: '',
@@ -243,12 +244,16 @@ export async function init() {
 
 /** Auto-push/auto-pull apply to every WTF account already known on this
  *  device (not ones only known via a cloud backup from elsewhere - see the
- *  Settings Backup dialog for pulling those down for the first time), one at a
- *  time so overlapping confirm dialogs (if several happen to conflict at
- *  once) don't stack on top of each other. */
+ *  Settings Backup dialog for pulling those down for the first time) that
+ *  hasn't been opted out via the dialog's per-account checkbox (an account
+ *  with no wtfAccountSync entry at all - never synced yet - is still
+ *  included, matching WtfAccountSyncState.autoSyncEnabled's own true
+ *  default), one at a time so overlapping confirm dialogs (if several
+ *  happen to conflict at once) don't stack on top of each other. */
 async function autoSyncAllWtfAccounts(direction: 'push' | 'pull') {
   await refreshWtfAccounts()
   for (const account of store.wtfAccounts) {
+    if (store.settings.wtfAccountSync[account]?.autoSyncEnabled === false) continue
     if (direction === 'push') {
       await wtfPushWithConfirm(account)
     } else {
@@ -434,6 +439,13 @@ export async function saveWtfSyncAutoPull(enabled: boolean) {
 
 export async function saveWtfSyncAutoPush(enabled: boolean) {
   store.settings = await api.setWtfSyncAutoPush(enabled)
+}
+
+/** Per-account opt-out from the Settings Backup dialog's checkbox - only
+ *  affects wtfSyncAutoPush/AutoPull's automatic sync, not a manual Back
+ *  Up/Restore click on the same account. */
+export async function saveWtfAccountAutoSyncEnabled(account: string, enabled: boolean) {
+  store.settings = await api.setWtfAccountAutoSyncEnabled(account, enabled)
 }
 
 /** Pushes one account's local WTF folder to the cloud. Rejects with a

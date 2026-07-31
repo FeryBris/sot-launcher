@@ -54,8 +54,13 @@ pub struct WtfCloudAccountEntry {
     pub size: Option<i64>,
 }
 
-/// Per-account sync bookkeeping — see Settings::wtf_account_sync.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// Per-account sync bookkeeping — see Settings::wtf_account_sync. Default is
+/// implemented by hand (not derived) so `WtfAccountSyncState::default()` -
+/// used by `.unwrap_or_default()` wherever a not-yet-synced account has no
+/// entry yet - agrees with auto_sync_enabled's serde default below: derive
+/// would give `bool::default()` (false), silently starting brand-new
+/// accounts with auto-sync OFF instead of on.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WtfAccountSyncState {
     /// Fingerprint (see wtf_sync::fingerprint_account) of the local account
@@ -72,6 +77,25 @@ pub struct WtfAccountSyncState {
     /// Wall-clock ms of the last successful push or pull, for display only.
     #[serde(default)]
     pub last_synced_at: Option<i64>,
+    /// Whether this account participates in wtf_sync_auto_push/auto_pull -
+    /// defaults to true so existing installs keep backing up every account
+    /// they already had (see Settings::wtf_sync_auto_push's own doc
+    /// comment), opt-out rather than opt-in. Manual Back Up/Restore from
+    /// the Settings Backup dialog ignore this - it only gates the
+    /// automatic, unattended sync.
+    #[serde(default = "default_true")]
+    pub auto_sync_enabled: bool,
+}
+
+impl Default for WtfAccountSyncState {
+    fn default() -> Self {
+        Self {
+            last_synced_fingerprint: None,
+            last_known_remote_updated_at: None,
+            last_synced_at: None,
+            auto_sync_enabled: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

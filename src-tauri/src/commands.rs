@@ -1002,6 +1002,24 @@ pub fn set_wtf_sync_auto_push(app: AppHandle, enabled: bool) -> Result<Settings,
     Ok(s)
 }
 
+/// Per-account opt-out of wtf_sync_auto_push/auto_pull (see
+/// WtfAccountSyncState::auto_sync_enabled) - only touches that one flag,
+/// preserving whatever sync bookkeeping already exists for the account (or
+/// using WtfAccountSyncState::default() - auto_sync_enabled: true - for one
+/// that's never been synced yet).
+#[tauri::command]
+pub fn set_wtf_account_auto_sync_enabled(app: AppHandle, account: String, enabled: bool) -> Result<Settings, String> {
+    let mut s = settings::load_settings(&app)?;
+    s.wtf_account_sync.entry(account.clone()).or_default().auto_sync_enabled = enabled;
+    settings::save_settings(&app, &s)?;
+    crate::debug_log::verbose(
+        &app,
+        "set_wtf_account_auto_sync_enabled",
+        &format!("account {account} set to {enabled}"),
+    );
+    Ok(s)
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WtfSyncInfo {
@@ -1108,6 +1126,10 @@ async fn wtf_push_inner(app: &AppHandle, state: &State<'_, AppState>, account: &
             last_synced_fingerprint: Some(fingerprint),
             last_known_remote_updated_at: status.updated_at,
             last_synced_at: Some(crate::sync_log::now_ms()),
+            // Carried forward, not reset - this insert replaces the whole
+            // entry, and a successful sync must never silently re-enable
+            // auto-sync for an account the player explicitly turned off.
+            auto_sync_enabled: existing.auto_sync_enabled,
         },
     );
     settings::save_settings(app, &s)?;
@@ -1173,6 +1195,8 @@ async fn wtf_pull_inner(app: &AppHandle, state: &State<'_, AppState>, account: &
             last_synced_fingerprint: Some(fingerprint),
             last_known_remote_updated_at: status.updated_at,
             last_synced_at: Some(crate::sync_log::now_ms()),
+            // Carried forward, not reset - see the matching comment in wtf_push_inner.
+            auto_sync_enabled: existing.auto_sync_enabled,
         },
     );
     settings::save_settings(app, &s)?;

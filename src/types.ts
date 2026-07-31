@@ -48,9 +48,23 @@ export interface Settings {
    *  "the" account (see the Settings Backup dialog). */
   wtfSyncAutoPull: boolean
   wtfSyncAutoPush: boolean
+  /** Per-account sync bookkeeping, keyed by WTF/Account/<name> - only ever
+   *  has an entry for an account that's been pushed/pulled at least once. */
+  wtfAccountSync: Record<string, WtfAccountSyncState>
   /** When on, debug.json records every action the launcher takes, not just
    *  errors — see Settings > Sync Logs' "Log everything" checkbox. */
   verboseLogging: boolean
+}
+
+/** Per-account WTF sync bookkeeping — see Settings.wtfAccountSync. */
+export interface WtfAccountSyncState {
+  lastSyncedFingerprint: string | null
+  lastKnownRemoteUpdatedAt: number | null
+  lastSyncedAt: number | null
+  /** Whether this account participates in wtfSyncAutoPush/AutoPull - an
+   *  account with no entry at all (never synced) is still enabled, same as
+   *  this field's own true default once an entry does exist. */
+  autoSyncEnabled: boolean
 }
 
 /** The paired user's personal WTF cloud backup state — distinct from
