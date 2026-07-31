@@ -49,6 +49,30 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install
 
+      # Self-signed cert (not a CA-issued one) - see packaging/windows-cert/
+      # for the public .cer + import script distributed alongside releases
+      # so players can trust it once, avoiding the SmartScreen/"Unknown
+      # Publisher" prompt on fresh installs. certificateThumbprint in
+      # tauri.conf.json only resolves if this exact cert is present in the
+      # signing machine's store, hence importing it here before the build.
+      - name: Import Windows code-signing certificate
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        env:
+          WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrEmpty($env:WINDOWS_CERT_PFX_BASE64)) {
+            Write-Error "WINDOWS_CERT_PFX_BASE64 secret is not set - see packaging/windows-cert/README.md"
+            exit 1
+          }
+          $pfxBytes = [Convert]::FromBase64String($env:WINDOWS_CERT_PFX_BASE64)
+          $pfxPath = Join-Path $env:RUNNER_TEMP "SoTLauncher.pfx"
+          [IO.File]::WriteAllBytes($pfxPath, $pfxBytes)
+          $securePassword = ConvertTo-SecureString -String $env:WINDOWS_CERT_PASSWORD -Force -AsPlainText
+          Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation Cert:\CurrentUser\My -Password $securePassword | Out-Null
+          Remove-Item $pfxPath
+
       # Plain `tauri build`, not tauri-action - nothing here should create a
       # GitHub Release or a git tag, it just needs to produce signed
       # installers for you to grab and upload through sot.sk's admin panel
@@ -91,11 +115,17 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-installers
+          # The .cer/.bat don't change release to release, but bundling them
+          # in anyway means a new user grabbing this zip always has
+          # everything needed for the one-time trust setup (see
+          # packaging/windows-cert/README.md) without hunting through the repo.
           path: |
             src-tauri/target/release/bundle/msi/*.msi
             src-tauri/target/release/bundle/msi/*.msi.sig
             src-tauri/target/release/bundle/nsis/*.exe
             src-tauri/target/release/bundle/nsis/*.exe.sig
+            packaging/windows-cert/SoTLauncher.cer
+            packaging/windows-cert/install-cert.bat
           if-no-files-found: error
 
       - name: Upload Linux installers

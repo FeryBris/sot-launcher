@@ -39,6 +39,10 @@
     ],
     "android": {
       "debugApplicationIdSuffix": ".debug"
+    },
+    "windows": {
+      "certificateThumbprint": "0210A0B71D80EAA80553459598AD835B95586091",
+      "digestAlgorithm": "sha256"
     }
   },
   "plugins": {

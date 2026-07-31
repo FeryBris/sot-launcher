@@ -15,6 +15,11 @@ dist-ssr
 # Tauri updater signing key (NEVER commit the private key)
 .tauri-keys/*.key
 
+# Windows code-signing certificate's private half (NEVER commit the .pfx) -
+# see packaging/windows-cert/ for the public .cer + import script that DO
+# get committed.
+.windows-cert/
+
 # Guild API key/URL baked into the build via src-tauri/build.rs — see
 # src-tauri/.env.example for the template. NEVER commit the real .env.
 .env
