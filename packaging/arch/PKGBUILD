@@ -1,9 +1,10 @@
 # Maintainer: SoT
 #
 # This PKGBUILD doesn't compile anything: it repackages the .deb already
-# produced by the ubuntu-22.04 leg of .github/workflows/release.yml into a
-# native pacman package. pkgver is rewritten by CI (see release.yml) to match
-# the release being built; the value below is just a placeholder.
+# produced by the ubuntu-22.04 leg of .github/workflows/build-release.yml
+# into a native pacman package. pkgver is rewritten by CI (see that
+# workflow's build-arch job) to match the release being built; the value
+# below is just a placeholder.
 pkgname=sotlauncher
 pkgver=0.0.0
 pkgrel=1
