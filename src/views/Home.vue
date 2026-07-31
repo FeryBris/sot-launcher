@@ -107,6 +107,11 @@ const sortedCharacters = computed<GuildSyncData[]>(() => {
   });
 });
 
+// Only worth labeling characters with their WoW account when this install
+// actually has more than one - the common single-account case would just
+// be redundant clutter on every card.
+const showAccounts = computed(() => new Set(store.guildSyncData.map((c) => c.account)).size > 1);
+
 function viewCharacterOnWeb(character: GuildSyncData) {
   void openCharacterPage(store.apiBaseUrl, character.name);
 }
@@ -140,6 +145,7 @@ function viewCharacterOnWeb(character: GuildSyncData) {
             <div class="card-footer">
               <span class="card-name">{{ character.name }}</span>
               <span v-if="character.guildRank" class="card-rank">{{ character.guildRank }}</span>
+              <span v-if="showAccounts" class="card-account">{{ character.account }}</span>
             </div>
 
             <button
@@ -273,6 +279,15 @@ function viewCharacterOnWeb(character: GuildSyncData) {
 .card-rank {
   font-size: 11px;
   color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.card-account {
+  font-size: 10px;
+  color: var(--text-dim);
+  opacity: 0.75;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

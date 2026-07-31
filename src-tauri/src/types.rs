@@ -617,4 +617,11 @@ pub struct GuildSyncData {
     #[serde(default)]
     pub honor_data: Option<GuildSyncHonorData>,
     pub updated_at: i64,
+    /// Which local WTF/Account/<name> folder this character was read from —
+    /// set by guild_sync::read_guild_sync_data after parsing, never present
+    /// in the addon's own JSON payload (a player can have several WoW
+    /// accounts under one install, each with its own SavedVariables file;
+    /// see that function's doc comment).
+    #[serde(default)]
+    pub account: String,
 }

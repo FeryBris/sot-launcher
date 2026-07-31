@@ -70,51 +70,89 @@ pub fn extract_json_string(raw: &str, field: &str) -> Option<String> {
     None
 }
 
-/// Reads and parses every guild character the addon currently knows about
-/// for the given WoW install — one entry per alt that's been logged into
-/// while a member of the guild, keyed by name in the addon's own
-/// SavedVariables so logging into one doesn't drop another's data. Returns
-/// an empty list if the addon hasn't written anything yet, rather than an
-/// error — that's the normal "never logged in as a guild member" case.
-pub fn read_guild_sync_data(game_path: &Path) -> Result<Vec<GuildSyncData>, String> {
-    let Some(path) = find_saved_variables_file(game_path, "SoTCharacterSync.lua") else {
-        return Ok(Vec::new());
-    };
-
-    let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    // The file can exist (SoTCharacterSyncDB = SoTCharacterSyncDB or {}
-    // always runs on load) without `json` ever having been written yet — e.g.
-    // guild membership was never confirmed true during this session. That's
-    // the same "nothing to report yet" case as the file not existing at
-    // all, not a real parse error.
-    let Some(json) = extract_json_string(&raw, "json") else {
-        return Ok(Vec::new());
-    };
-
-    // The addon's own JSON encoder can't tell an empty map from an empty
-    // array (Lua has no distinction), so it always writes an empty
-    // `characters` table as `[]` — treat that one specific case as zero
-    // characters rather than a real map-shape parse error.
-    if json.trim() == "[]" {
-        return Ok(Vec::new());
-    }
-
-    // Parsed generically first, then each character converted individually
-    // — the addon's own data shape evolves over time (e.g. equipment went
-    // from a flat item-ID array to a richer per-item object), and a single
-    // character whose entry predates a shape change (hasn't logged back in
-    // to get rewritten yet) must never take every other character down
-    // with it.
-    let by_name: std::collections::HashMap<String, serde_json::Value> = serde_json::from_str(&json)
-        .map_err(|e| format!("failed to parse guild sync data: {e}"))?;
-
-    let mut characters: Vec<GuildSyncData> = Vec::new();
-    for (name, value) in by_name {
-        match serde_json::from_value::<GuildSyncData>(value) {
-            Ok(data) => characters.push(data),
-            Err(e) => eprintln!("skipping guild sync entry for '{name}': {e}"),
+/// Every `WTF/Account/<NAME>/SavedVariables/<file_name>` that actually
+/// exists, paired with the account name it belongs to — unlike
+/// `find_saved_variables_file` (which picks a single "most recently
+/// written" winner, appropriate for guild-wide data like SoTGuildSync),
+/// this is for SoTCharacterSync specifically, where each WoW account's
+/// SavedVariables only ever lists the characters logged into *on that
+/// account*, so every account's file has to be read, not just the newest.
+fn all_saved_variables_files(game_path: &Path, file_name: &str) -> Vec<(String, PathBuf)> {
+    let accounts_dir = game_path.join("WTF").join("Account");
+    let mut out = Vec::new();
+    for account_dir in crate::virtualstore::list_dirs_merged(&accounts_dir) {
+        let Some(account) = account_dir.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let candidate = crate::virtualstore::resolve_read_path(&account_dir.join("SavedVariables").join(file_name));
+        if candidate.is_file() {
+            out.push((account.to_string(), candidate));
         }
     }
+    out
+}
+
+/// Reads and parses every guild character the addon currently knows about
+/// across EVERY WoW account under this install — one entry per alt that's
+/// been logged into while a member of the guild, keyed by name within each
+/// account's own SavedVariables so logging into one doesn't drop another's
+/// data on the same account. A player with several WoW accounts (each its
+/// own WTF/Account/<name> folder) gets characters from all of them, not
+/// just whichever account was played most recently — each is tagged with
+/// the account it came from (see GuildSyncData::account). Returns an empty
+/// list if no account has ever written anything, rather than an error —
+/// that's the normal "never logged in as a guild member" case.
+pub fn read_guild_sync_data(game_path: &Path) -> Result<Vec<GuildSyncData>, String> {
+    let mut characters: Vec<GuildSyncData> = Vec::new();
+
+    for (account, path) in all_saved_variables_files(game_path, "SoTCharacterSync.lua") {
+        let Ok(raw) = fs::read_to_string(&path) else {
+            // One account's file being unreadable (permissions, mid-write
+            // race) shouldn't take every other account's characters down
+            // with it.
+            continue;
+        };
+        // The file can exist (SoTCharacterSyncDB = SoTCharacterSyncDB or {}
+        // always runs on load) without `json` ever having been written yet
+        // — e.g. guild membership was never confirmed true during this
+        // session on this account. That's the same "nothing to report yet"
+        // case as the file not existing at all, not a real parse error.
+        let Some(json) = extract_json_string(&raw, "json") else {
+            continue;
+        };
+
+        // The addon's own JSON encoder can't tell an empty map from an empty
+        // array (Lua has no distinction), so it always writes an empty
+        // `characters` table as `[]` — treat that one specific case as zero
+        // characters rather than a real map-shape parse error.
+        if json.trim() == "[]" {
+            continue;
+        }
+
+        // Parsed generically first, then each character converted
+        // individually — the addon's own data shape evolves over time (e.g.
+        // equipment went from a flat item-ID array to a richer per-item
+        // object), and a single character whose entry predates a shape
+        // change (hasn't logged back in to get rewritten yet) must never
+        // take every other character down with it. Likewise, a parse
+        // failure of one account's JSON blob (e.g. caught mid-write) must
+        // not drop every other account's already-good data.
+        let Ok(by_name) = serde_json::from_str::<std::collections::HashMap<String, serde_json::Value>>(&json) else {
+            eprintln!("skipping guild sync data for account '{account}': failed to parse JSON");
+            continue;
+        };
+
+        for (name, value) in by_name {
+            match serde_json::from_value::<GuildSyncData>(value) {
+                Ok(mut data) => {
+                    data.account = account.clone();
+                    characters.push(data);
+                }
+                Err(e) => eprintln!("skipping guild sync entry for '{name}' (account '{account}'): {e}"),
+            }
+        }
+    }
+
     characters.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(characters)
 }

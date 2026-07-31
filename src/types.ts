@@ -408,4 +408,9 @@ export interface GuildSyncData {
   stats: GuildSyncStats
   professions: GuildSyncProfessions
   updatedAt: number
+  /** Which local WTF/Account/<name> folder this character was read from —
+   *  a launcher-local concern (never sent to the website), used so Home can
+   *  show which WoW account each character belongs to when a player has
+   *  more than one under this install. */
+  account: string
 }

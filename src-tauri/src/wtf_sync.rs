@@ -221,24 +221,12 @@ pub fn zip_account(dir: &Path) -> Result<Vec<u8>, String> {
     Ok(buf)
 }
 
-/// Extracts `bytes` into a temp folder first and only swaps it into the
-/// target folder's place once every entry has been written successfully —
+/// Extracts `bytes` into a temp folder first and only swaps it into
+/// `target_dir`'s place once every entry has been written successfully —
 /// a partial extraction straight into the target on failure (a bad chunk,
 /// a full disk) would leave the player's real settings half-overwritten
 /// with no way back.
-///
-/// If this account is already virtualized (its VirtualStore mirror
-/// exists, meaning WoW's own writes for it are landing there rather than
-/// under `dir` — see virtualstore.rs), restores go there instead: once
-/// virtualization is active for a path, Windows always serves reads from
-/// the mirror first, so restoring only to the real `dir` would leave WoW
-/// reading its old data as if nothing had changed.
-pub fn extract_account_zip(bytes: &[u8], dir: &Path) -> Result<(), String> {
-    let target_dir = match crate::virtualstore::virtualstore_mirror(dir) {
-        Some(mirror) if mirror.is_dir() => mirror,
-        _ => dir.to_path_buf(),
-    };
-
+fn extract_account_zip_to(bytes: &[u8], target_dir: &Path) -> Result<(), String> {
     let tmp_name = format!(
         ".wtfsync-tmp-{}",
         target_dir.file_name().and_then(|n| n.to_str()).unwrap_or("account")
@@ -259,6 +247,38 @@ pub fn extract_account_zip(bytes: &[u8], dir: &Path) -> Result<(), String> {
         std::fs::remove_dir_all(&target_dir).map_err(|e| e.to_string())?;
     }
     std::fs::rename(&tmp_dir, &target_dir).map_err(|e| e.to_string())
+}
+
+/// Extracts `bytes` (an account's pulled WTF backup) into `dir` — and, if
+/// `dir` sits under a virtualization-eligible root (Program Files/Windows —
+/// see virtualstore.rs), *also* into its VirtualStore mirror, regardless of
+/// whether that mirror currently exists.
+///
+/// Which of the two locations WoW's own writes actually land in isn't
+/// stable across runs: it depends on whether the client happens to be
+/// running elevated that time, which can differ if it's launched directly
+/// vs through this or another launcher, or after a Windows update. Writing
+/// only to "whichever one currently has data" (the old behavior) meant a
+/// pull could silently land in the location WoW *isn't* about to read from
+/// on its next run, leaving the player looking at stale data despite the
+/// sync having reported success. Writing both sidesteps needing to predict
+/// that in advance.
+///
+/// The real `dir` write is authoritative and its failure fails the whole
+/// pull; the VirtualStore mirror write is best-effort redundancy and only
+/// logged on failure, since `dir` having succeeded already leaves the
+/// player with correct data in the one location every reader (this
+/// launcher included) always checks first.
+pub fn extract_account_zip(bytes: &[u8], dir: &Path) -> Result<(), String> {
+    extract_account_zip_to(bytes, dir)?;
+
+    if let Some(mirror_dir) = crate::virtualstore::virtualstore_mirror(dir) {
+        if let Err(e) = extract_account_zip_to(bytes, &mirror_dir) {
+            log::warn!("wtf_pull: failed to mirror extracted data to {}: {e}", mirror_dir.display());
+        }
+    }
+
+    Ok(())
 }
 
 fn extract_into(bytes: &[u8], dest_dir: &Path) -> Result<(), String> {

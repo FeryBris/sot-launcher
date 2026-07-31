@@ -290,8 +290,8 @@ pub fn get_guild_sync_data(app: AppHandle) -> Result<Vec<crate::types::GuildSync
 }
 
 #[derive(serde::Serialize)]
-struct SyncCharactersPayload<'a> {
-    characters: &'a [crate::types::GuildSyncData],
+struct SyncCharactersPayload {
+    characters: Vec<serde_json::Value>,
 }
 
 /// Reads the same snapshot `get_guild_sync_data` does and POSTs every
@@ -329,12 +329,24 @@ async fn sync_guild_data_to_web_inner(app: &AppHandle, state: &State<'_, AppStat
         return Err("no character data found yet — log in as a Stalkers of Time member first".to_string());
     }
 
+    // `account` is a local-only field (which WTF/Account/<name> folder this
+    // character came from) - strip it before sending so the website's
+    // payload shape is unchanged by it.
+    let characters: Vec<serde_json::Value> = data
+        .iter()
+        .filter_map(|c| {
+            let mut v = serde_json::to_value(c).ok()?;
+            v.as_object_mut()?.remove("account");
+            Some(v)
+        })
+        .collect();
+
     let url = format!("{}/characters/sync", crate::config::API_BASE_URL.trim_end_matches('/'));
     let req = state.http.post(&url)
         .bearer_auth(token)
         .header("X-API-KEY", crate::config::API_KEY)
         .header("Accept", "application/json")
-        .json(&SyncCharactersPayload { characters: &data });
+        .json(&SyncCharactersPayload { characters });
 
     let resp = req.send().await.map_err(|e| e.to_string())?;
     if !resp.status().is_success() {

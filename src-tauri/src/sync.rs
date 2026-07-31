@@ -406,11 +406,23 @@ pub fn get_installed_state(game_path: &str, manifest: &Manifest) -> InstalledSta
             None => (None, None, None),
         };
 
+        // `sha256` deliberately keeps whatever was last recorded for an
+        // actual install (set only by sync_addons, when it really did
+        // download+verify+extract that hash) rather than being refreshed to
+        // the manifest's current value here — this function only re-checks
+        // what's ALREADY on disk, it never re-downloads anything. Blindly
+        // adopting the manifest's current sha256 on every refresh made an
+        // addon whose manifest entry had moved on (declared a new version)
+        // look already up to date before it was ever actually re-synced:
+        // pendingUpdateCount() (and sync_addons' own up-to-date check) both
+        // compare this field against the manifest, so the "Update" button
+        // would silently never appear, and a Sync click would just skip it
+        // as already-current.
         let (kind, api_version, sha256) = if entry.kind == "custom" {
             (entry.kind, entry.api_version, entry.sha256)
         } else {
             match manifest_by_name.get(entry.name.as_str()) {
-                Some(a) => (a.category.clone(), Some(a.version.clone()), Some(a.sha256.clone())),
+                Some(a) => (a.category.clone(), Some(a.version.clone()), entry.sha256),
                 // No longer in the manifest; keep last-known info until sync cleans it up.
                 None => (entry.kind, entry.api_version, entry.sha256),
             }
