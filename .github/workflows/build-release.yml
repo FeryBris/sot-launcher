@@ -151,7 +151,11 @@ jobs:
 
           useradd -m builder
           cd packaging/arch
-          mv ./*.deb sotlauncher.deb
+          # linux-installers was uploaded from several glob patterns (appimage/,
+          # deb/, rpm/ subfolders under bundle/), so upload-artifact preserved
+          # those subfolders relative to their common ancestor - the .deb isn't
+          # at the top level of the downloaded artifact, it's under ./deb/.
+          mv ./deb/*.deb sotlauncher.deb
           sed -i "s/^pkgver=.*/pkgver=${VERSION}/" PKGBUILD
           chown -R builder:builder .
           # --nodeps: depends=() in the PKGBUILD describes the resulting
