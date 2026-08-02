@@ -54,6 +54,11 @@ export interface Settings {
   /** When on, debug.json records every action the launcher takes, not just
    *  errors — see Settings > Sync Logs' "Log everything" checkbox. */
   verboseLogging: boolean
+  /** When on, a captured combat log session syncs to the website
+   *  automatically, no manual "Sync" click needed — see the Logs tab.
+   *  Off by default, unlike WTF auto-sync, since there's no undo window:
+   *  an auto-synced session uploads before there's any chance to Ignore it. */
+  combatLogAutoSync: boolean
 }
 
 /** Per-account WTF sync bookkeeping — see Settings.wtfAccountSync. */
@@ -399,6 +404,47 @@ export interface SyncableRaid {
   capturedAt: number
   raidJson: string
   lootJson: string | null
+  alreadySynced: boolean
+  isIgnored: boolean
+}
+
+export type CombatRole = 'Tank' | 'Healer' | 'Dps'
+export type CombatContentType = 'Unknown' | 'Dungeon' | 'Raid' | 'World'
+
+export interface CombatPlayerReport {
+  guid: string
+  name: string
+  role: CombatRole
+  damageDone: number
+  healingDone: number
+  damageTaken: number
+  deaths: number
+  activeTimeSec: number
+  dps: number
+  hps: number
+}
+
+/** One completed combat log encounter — a boss/trash pull, not a whole
+ *  raid night (see combat_log_session.rs). Boss/instance identity isn't
+ *  resolved here at all: npcNames is just the raw NPC name(s) that took
+ *  player damage, most-damaged first — matching one to a real Boss/
+ *  Instance row (or not, for content that has none) is backend work. */
+export interface CombatEncounterReport {
+  sessionId: string
+  startTimeMs: number
+  endTimeMs: number
+  durationSec: number
+  contentType: CombatContentType
+  contentQualityScore: number
+  eventCount: number
+  npcNames: string[]
+  players: CombatPlayerReport[]
+}
+
+/** get_captured_combat_sessions' return shape — the flattened
+ *  CombatEncounterReport fields plus sync/ignore status, same
+ *  already-synced/is-ignored convention as SyncableRaid above. */
+export interface SyncableEncounter extends CombatEncounterReport {
   alreadySynced: boolean
   isIgnored: boolean
 }

@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { open } from '@tauri-apps/plugin-shell'
 import type {
+  CombatEncounterReport,
   CombinedSyncResult,
   DebugLogEntry,
   GuildRosterData,
@@ -11,6 +12,7 @@ import type {
   Manifest,
   MyLootResponse,
   Settings,
+  SyncableEncounter,
   SyncableRaid,
   SyncLogEntry,
   SyncProgress,
@@ -159,6 +161,47 @@ export function setRaidIgnored(raidId: string, ignored: boolean): Promise<void> 
 
 export function getMyLoot(): Promise<MyLootResponse> {
   return invoke('get_my_loot')
+}
+
+/** Combat log encounters captured so far this session (see
+ *  src-tauri/src/combat_log_watcher.rs), each annotated with whether
+ *  this launcher has already synced it — powers the Logs tab. */
+export function getCapturedCombatSessions(): Promise<SyncableEncounter[]> {
+  return invoke('get_captured_combat_sessions')
+}
+
+/** Pushes one captured combat session to the website. Not yet backed by a
+ *  real endpoint server-side — currently just rejects with an HTTP error. */
+export function syncCombatSessionToWeb(sessionId: string): Promise<void> {
+  return invoke('sync_combat_session_to_web', { sessionId })
+}
+
+/** Local-only — hides (or restores) a captured combat session in the Logs tab. */
+export function setCombatSessionIgnored(sessionId: string, ignored: boolean): Promise<void> {
+  return invoke('set_combat_session_ignored', { sessionId, ignored })
+}
+
+export function setCombatLogAutoSync(enabled: boolean): Promise<Settings> {
+  return invoke('set_combat_log_auto_sync', { enabled })
+}
+
+/** Discards the saved checkpoint and reprocesses the whole current combat
+ *  log as historical backlog - normally only happens automatically the
+ *  very first time a log path is watched (see combat_log_watcher.rs), this
+ *  forces it again (e.g. a checkpoint saved by an older build). */
+export function reprocessCombatLog(): Promise<void> {
+  return invoke('reprocess_combat_log')
+}
+
+/** Fires whenever the watcher finalizes a new combat log encounter (see
+ *  src-tauri/src/combat_log_watcher.rs) - lets the Logs tab update live
+ *  instead of only refreshing on mount. The payload is the raw encounter,
+ *  not a SyncableEncounter — it was only just captured, so alreadySynced/
+ *  isIgnored are always false and the frontend adds them itself. */
+export function onCombatEncounterCompleted(
+  handler: (encounter: CombatEncounterReport) => void,
+): Promise<UnlistenFn> {
+  return listen<CombatEncounterReport>('combat-encounter-completed', (event) => handler(event.payload))
 }
 
 export function onSyncProgress(handler: (p: SyncProgress) => void): Promise<UnlistenFn> {

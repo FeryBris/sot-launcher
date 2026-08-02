@@ -27,6 +27,31 @@ pub struct AppState {
     /// stacking up a second poller if Play is clicked again while one's
     /// already watching.
     pub game_close_watching: std::sync::atomic::AtomicBool,
+    /// The active combat-log watcher (see combat_log_watcher.rs) — same
+    /// replace-to-restart lifecycle as guild_watcher above.
+    pub combat_log_watcher: std::sync::Mutex<Option<notify::RecommendedWatcher>>,
+    /// Shared with the combat-log watcher's background thread (via Arc, not
+    /// just Mutex like guild_watcher) since both that thread and this
+    /// state's owner need live access to the same in-progress encounter,
+    /// not just to swap the whole thing out.
+    pub combat_log_tracker:
+        std::sync::Arc<std::sync::Mutex<crate::combat_log_session::SessionTracker>>,
+    /// Recently completed encounters, for get_captured_combat_sessions to
+    /// hand the frontend whatever it missed by not having been mounted yet
+    /// when combat-encounter-completed fired.
+    pub combat_log_recent:
+        std::sync::Arc<std::sync::Mutex<Vec<crate::combat_log_session::EncounterReport>>>,
+    /// (session_id, raw log text) for the same recently completed encounters
+    /// as combat_log_recent above, kept separate so the frontend never has
+    /// to receive this (potentially multi-megabyte) text just to show a
+    /// summary row - see combat_log_watcher::RawLogStore's own doc comment.
+    pub combat_log_raw_logs: crate::combat_log_watcher::RawLogStore,
+    /// Bumped by every watch_combat_log call - lets a still-polling "wait
+    /// for WoWCombatLog.txt to be created" background thread (see
+    /// combat_log_watcher.rs) notice it's been superseded by a newer call
+    /// (e.g. the game folder changed again) and exit, instead of stacking
+    /// up a second poller running against a stale path forever.
+    pub combat_log_watch_epoch: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl Default for AppState {
@@ -45,8 +70,250 @@ impl Default for AppState {
             tray_primary_item: std::sync::Mutex::new(None),
             guild_watcher: std::sync::Mutex::new(None),
             game_close_watching: std::sync::atomic::AtomicBool::new(false),
+            combat_log_watcher: std::sync::Mutex::new(None),
+            combat_log_tracker: std::sync::Arc::new(std::sync::Mutex::new(
+                crate::combat_log_session::SessionTracker::new(
+                    crate::combat_log_watcher::ENCOUNTER_TIMEOUT_MS,
+                ),
+            )),
+            combat_log_recent: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            combat_log_raw_logs: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            combat_log_watch_epoch: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncableEncounter {
+    #[serde(flatten)]
+    pub encounter: crate::combat_log_session::EncounterReport,
+    /// True if a successful "combat_session" sync_log entry already exists
+    /// for this session_id — same convention as SyncableRaid::already_synced.
+    pub already_synced: bool,
+    /// True if the user has explicitly hidden this session (see
+    /// ignored_combat_sessions).
+    pub is_ignored: bool,
+}
+
+/// Whatever completed encounters the combat-log watcher has captured since
+/// the launcher started (or since the watched game folder last changed),
+/// each annotated with sync/ignore status — covers the frontend having
+/// missed the combat-encounter-completed event (e.g. it wasn't mounted yet)
+/// same as get_captured_raids does for raids.
+#[tauri::command]
+pub fn get_captured_combat_sessions(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Vec<SyncableEncounter>, String> {
+    let encounters = state.combat_log_recent.lock().unwrap().clone();
+    let log = crate::sync_log::load_sync_log(&app).unwrap_or_default();
+    let ignored_ids =
+        crate::ignored_combat_sessions::load_ignored_sessions(&app).unwrap_or_default();
+
+    let synced_ids: std::collections::HashSet<String> = log
+        .iter()
+        .filter(|e| e.kind == "combat_session" && e.success)
+        .filter_map(|e| e.session_id.clone())
+        .collect();
+
+    Ok(encounters
+        .into_iter()
+        .map(|encounter| SyncableEncounter {
+            already_synced: synced_ids.contains(&encounter.session_id),
+            is_ignored: ignored_ids.contains(&encounter.session_id),
+            encounter,
+        })
+        .collect())
+}
+
+/// Marks (or unmarks) a captured combat session as ignored — purely local
+/// to this launcher install, doesn't touch anything on the website. Mirrors
+/// set_raid_ignored.
+#[tauri::command]
+pub fn set_combat_session_ignored(
+    app: AppHandle,
+    session_id: String,
+    ignored: bool,
+) -> Result<(), String> {
+    let result = crate::ignored_combat_sessions::set_session_ignored(&app, &session_id, ignored);
+    if result.is_ok() {
+        crate::debug_log::verbose(
+            &app,
+            "set_combat_session_ignored",
+            &format!("session {session_id}: ignored={ignored}"),
+        );
+    }
+    result
+}
+
+/// Pushes one captured combat session (see get_captured_combat_sessions) to
+/// the website. Just looks the report up and hands off to
+/// sync_encounter_to_web, which is also what combat_log_watcher's auto-sync
+/// path calls directly (no session_id lookup needed there — it already has
+/// the freshly completed report in hand).
+#[tauri::command]
+pub async fn sync_combat_session_to_web(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<(), String> {
+    let encounter = state
+        .combat_log_recent
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|e| e.session_id == session_id)
+        .cloned()
+        .ok_or_else(|| {
+            "session not found — it may have aged out of the recent-encounters buffer".to_string()
+        })?;
+
+    sync_encounter_to_web(&app, &state.http, &encounter).await
+}
+
+/// Posts one encounter to the website and records the outcome in the sync
+/// log (so already_synced/error reporting is identical regardless of
+/// whether this was triggered by the user clicking Sync or by
+/// combat_log_auto_sync firing automatically right after capture).
+pub async fn sync_encounter_to_web(
+    app: &AppHandle,
+    http: &reqwest::Client,
+    encounter: &crate::combat_log_session::EncounterReport,
+) -> Result<(), String> {
+    let result = sync_encounter_to_web_inner(app, http, encounter).await;
+
+    crate::sync_log::append_sync_log(
+        app,
+        crate::types::SyncLogEntry {
+            at: crate::sync_log::now_ms(),
+            kind: "combat_session".to_string(),
+            success: result.is_ok(),
+            error: result.as_ref().err().cloned(),
+            raid_id: None,
+            session_id: Some(encounter.session_id.clone()),
+        },
+    );
+
+    if result.is_ok() {
+        crate::debug_log::verbose(
+            app,
+            "sync_combat_session_to_web",
+            &format!("synced combat session {} to web", encounter.session_id),
+        );
+    }
+    crate::debug_log::log_on_err(app, "sync_combat_session_to_web", result)
+}
+
+/// Sent as multipart (not plain JSON) so the raw log — the full "everything
+/// that happened" text (see CombatSession::raw_lines), easily megabytes for
+/// a long raid pull — can go alongside the summary as a compressed file part
+/// instead of bloating a JSON body. The summary itself still travels as one
+/// JSON-encoded "payload" field rather than flattened form fields, since
+/// players is a nested array the backend already validates as JSON.
+async fn sync_encounter_to_web_inner(
+    app: &AppHandle,
+    http: &reqwest::Client,
+    encounter: &crate::combat_log_session::EncounterReport,
+) -> Result<(), String> {
+    let s = settings::load_settings(app)?;
+    let token = s
+        .discord_token
+        .as_deref()
+        .filter(|t| !t.is_empty())
+        .ok_or_else(|| "sign in with Discord first".to_string())?;
+
+    // Looked up fresh here (rather than threaded through as a parameter)
+    // since both callers of sync_encounter_to_web (the manual sync command
+    // and the watcher's auto-sync path) already have an AppHandle to fetch
+    // it from, and only this function actually needs it.
+    let raw_log = app
+        .state::<AppState>()
+        .combat_log_raw_logs
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(session_id, _)| session_id == &encounter.session_id)
+        .map(|(_, raw_log)| raw_log.clone());
+
+    let payload = serde_json::to_string(encounter).map_err(|e| e.to_string())?;
+    let mut form = reqwest::multipart::Form::new().text("payload", payload);
+
+    if let Some(raw_log) = raw_log.filter(|text| !text.is_empty()) {
+        let gzipped = gzip_text(&raw_log)?;
+        let part = reqwest::multipart::Part::bytes(gzipped)
+            .file_name("combat.log.gz")
+            .mime_str("application/gzip")
+            .map_err(|e| e.to_string())?;
+        form = form.part("rawLog", part);
+    }
+
+    let url = format!(
+        "{}/combat-log/sync",
+        crate::config::API_BASE_URL.trim_end_matches('/')
+    );
+    let resp = http
+        .post(&url)
+        .bearer_auth(token)
+        .header("X-API-KEY", crate::config::API_KEY)
+        .header("Accept", "application/json")
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !resp.status().is_success() {
+        return Err(format!(
+            "HTTP {} while syncing combat session",
+            resp.status()
+        ));
+    }
+    Ok(())
+}
+
+fn gzip_text(text: &str) -> Result<Vec<u8>, String> {
+    use std::io::Write;
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder
+        .write_all(text.as_bytes())
+        .map_err(|e| e.to_string())?;
+    encoder.finish().map_err(|e| e.to_string())
+}
+
+/// Whether new combat log sessions sync to the website automatically as
+/// soon as they're captured (see Settings::combat_log_auto_sync's doc
+/// comment and combat_log_watcher::maybe_auto_sync, which reads this
+/// setting right after a new encounter is stored).
+#[tauri::command]
+pub fn set_combat_log_auto_sync(app: AppHandle, enabled: bool) -> Result<Settings, String> {
+    let mut s = settings::load_settings(&app)?;
+    s.combat_log_auto_sync = enabled;
+    settings::save_settings(&app, &s)?;
+    crate::debug_log::verbose(
+        &app,
+        "set_combat_log_auto_sync",
+        &format!("set to {enabled}"),
+    );
+    Ok(s)
+}
+
+/// Forces the whole current combat log to be reprocessed as historical
+/// backlog, discarding any saved checkpoint first — see
+/// combat_log_watcher::reprocess_combat_log for why this needs to exist as
+/// its own action rather than only ever happening automatically once.
+#[tauri::command]
+pub fn reprocess_combat_log(app: AppHandle) -> Result<(), String> {
+    let s = settings::load_settings(&app)?;
+    let game_path = s
+        .game_path()
+        .ok_or_else(|| "no game folder configured".to_string())?;
+    crate::combat_log_watcher::reprocess_combat_log(&app, Path::new(&game_path));
+    crate::debug_log::verbose(
+        &app,
+        "reprocess_combat_log",
+        "reprocessing the whole combat log from scratch",
+    );
+    Ok(())
 }
 
 /// Relabels the tray's first menu item ("Play" <-> "Update") — the
@@ -73,8 +340,13 @@ pub fn set_game_path_windows(app: AppHandle, path: String) -> Result<Settings, S
     settings::save_settings(&app, &s)?;
     if let Some(current) = s.game_path() {
         crate::watcher::watch_guild_data(&app, Path::new(&current));
+        crate::combat_log_watcher::watch_combat_log(&app, Path::new(&current));
     }
-    crate::debug_log::verbose(&app, "set_game_path_windows", &format!("game folder set to {path}"));
+    crate::debug_log::verbose(
+        &app,
+        "set_game_path_windows",
+        &format!("game folder set to {path}"),
+    );
     Ok(s)
 }
 
@@ -85,8 +357,13 @@ pub fn set_game_path_linux(app: AppHandle, path: String) -> Result<Settings, Str
     settings::save_settings(&app, &s)?;
     if let Some(current) = s.game_path() {
         crate::watcher::watch_guild_data(&app, Path::new(&current));
+        crate::combat_log_watcher::watch_combat_log(&app, Path::new(&current));
     }
-    crate::debug_log::verbose(&app, "set_game_path_linux", &format!("game folder set to {path}"));
+    crate::debug_log::verbose(
+        &app,
+        "set_game_path_linux",
+        &format!("game folder set to {path}"),
+    );
     Ok(s)
 }
 
@@ -121,9 +398,17 @@ pub fn is_self_update_supported() -> bool {
 pub fn set_launch_command(app: AppHandle, command: String) -> Result<Settings, String> {
     let mut s = settings::load_settings(&app)?;
     let trimmed = command.trim();
-    s.launch_command = if trimmed.is_empty() { None } else { Some(trimmed.to_string()) };
+    s.launch_command = if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    };
     settings::save_settings(&app, &s)?;
-    crate::debug_log::verbose(&app, "set_launch_command", &format!("custom launch command set to {:?}", s.launch_command));
+    crate::debug_log::verbose(
+        &app,
+        "set_launch_command",
+        &format!("custom launch command set to {:?}", s.launch_command),
+    );
     Ok(s)
 }
 
@@ -181,22 +466,41 @@ pub async fn pick_game_folder(app: AppHandle) -> Result<Option<String>, String> 
 }
 
 #[tauri::command]
-pub async fn fetch_manifest(app: AppHandle, state: State<'_, AppState>) -> Result<Manifest, String> {
+pub async fn fetch_manifest(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Manifest, String> {
     let result = fetch_manifest_inner(&state).await;
     if let Ok(m) = &result {
-        crate::debug_log::verbose(&app, "fetch_manifest", &format!("fetched {} addons, {} wtf files", m.addons.len(), m.wtf_files.len()));
+        crate::debug_log::verbose(
+            &app,
+            "fetch_manifest",
+            &format!(
+                "fetched {} addons, {} wtf files",
+                m.addons.len(),
+                m.wtf_files.len()
+            ),
+        );
     }
     crate::debug_log::log_on_err(&app, "fetch_manifest", result)
 }
 
 async fn fetch_manifest_inner(state: &State<'_, AppState>) -> Result<Manifest, String> {
-    let url = format!("{}/manifest", crate::config::API_BASE_URL.trim_end_matches('/'));
-    let req = state.http.get(&url)
+    let url = format!(
+        "{}/manifest",
+        crate::config::API_BASE_URL.trim_end_matches('/')
+    );
+    let req = state
+        .http
+        .get(&url)
         .header("X-API-KEY", crate::config::API_KEY)
         .header("Accept", "application/json");
     let resp = req.send().await.map_err(|e| e.to_string())?;
     if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
-        return Err("Unauthorized: the launcher's guild API key is invalid — contact an officer".to_string());
+        return Err(
+            "Unauthorized: the launcher's guild API key is invalid — contact an officer"
+                .to_string(),
+        );
     }
     if !resp.status().is_success() {
         return Err(format!("HTTP {} while fetching manifest", resp.status()));
@@ -211,7 +515,9 @@ async fn fetch_manifest_inner(state: &State<'_, AppState>) -> Result<Manifest, S
 #[tauri::command]
 pub fn get_installed_state(app: AppHandle, manifest: Manifest) -> Result<InstalledState, String> {
     let s = settings::load_settings(&app)?;
-    let game_path = s.game_path().ok_or_else(|| "no game folder configured".to_string())?;
+    let game_path = s
+        .game_path()
+        .ok_or_else(|| "no game folder configured".to_string())?;
     Ok(sync::get_installed_state(&game_path, &manifest))
 }
 
@@ -220,11 +526,22 @@ pub fn get_installed_state(app: AppHandle, manifest: Manifest) -> Result<Install
 /// custom addons have no manifest entry to sync against, so this is the only
 /// mechanism available for them.
 #[tauri::command]
-pub fn set_addon_disabled(app: AppHandle, manifest: Manifest, name: String, disabled: bool) -> Result<InstalledState, String> {
+pub fn set_addon_disabled(
+    app: AppHandle,
+    manifest: Manifest,
+    name: String,
+    disabled: bool,
+) -> Result<InstalledState, String> {
     let s = settings::load_settings(&app)?;
-    let game_path = s.game_path().ok_or_else(|| "no game folder configured".to_string())?;
+    let game_path = s
+        .game_path()
+        .ok_or_else(|| "no game folder configured".to_string())?;
     sync::set_addon_disabled(&game_path, &name, disabled)?;
-    crate::debug_log::verbose(&app, "set_addon_disabled", &format!("{name}: disabled={disabled}"));
+    crate::debug_log::verbose(
+        &app,
+        "set_addon_disabled",
+        &format!("{name}: disabled={disabled}"),
+    );
     Ok(sync::get_installed_state(&game_path, &manifest))
 }
 
@@ -234,9 +551,15 @@ pub fn set_addon_disabled(app: AppHandle, manifest: Manifest, name: String, disa
 /// addons this also unchecks it so it doesn't silently come back on the
 /// next sync.
 #[tauri::command]
-pub fn delete_addon(app: AppHandle, manifest: Manifest, name: String) -> Result<InstalledState, String> {
+pub fn delete_addon(
+    app: AppHandle,
+    manifest: Manifest,
+    name: String,
+) -> Result<InstalledState, String> {
     let mut s = settings::load_settings(&app)?;
-    let game_path = s.game_path().ok_or_else(|| "no game folder configured".to_string())?;
+    let game_path = s
+        .game_path()
+        .ok_or_else(|| "no game folder configured".to_string())?;
 
     if let Some(removed) = sync::delete_addon(&game_path, &name)? {
         if removed.kind != "custom" {
@@ -253,9 +576,15 @@ pub fn delete_addon(app: AppHandle, manifest: Manifest, name: String) -> Result<
 /// — the actual point of no return. Only acts on something already in
 /// Interface/.DeletedAddons.
 #[tauri::command]
-pub fn delete_addon_forever(app: AppHandle, manifest: Manifest, name: String) -> Result<InstalledState, String> {
+pub fn delete_addon_forever(
+    app: AppHandle,
+    manifest: Manifest,
+    name: String,
+) -> Result<InstalledState, String> {
     let s = settings::load_settings(&app)?;
-    let game_path = s.game_path().ok_or_else(|| "no game folder configured".to_string())?;
+    let game_path = s
+        .game_path()
+        .ok_or_else(|| "no game folder configured".to_string())?;
     sync::delete_addon_forever(&game_path, &name)?;
     crate::debug_log::verbose(&app, "delete_addon_forever", &format!("{name}: purged"));
     Ok(sync::get_installed_state(&game_path, &manifest))
@@ -268,11 +597,22 @@ pub fn delete_addon_forever(app: AppHandle, manifest: Manifest, name: String) ->
 /// before retrying with `force: true`, which permanently deletes the
 /// occupant first.
 #[tauri::command]
-pub fn restore_addon(app: AppHandle, manifest: Manifest, name: String, force: bool) -> Result<InstalledState, String> {
+pub fn restore_addon(
+    app: AppHandle,
+    manifest: Manifest,
+    name: String,
+    force: bool,
+) -> Result<InstalledState, String> {
     let s = settings::load_settings(&app)?;
-    let game_path = s.game_path().ok_or_else(|| "no game folder configured".to_string())?;
+    let game_path = s
+        .game_path()
+        .ok_or_else(|| "no game folder configured".to_string())?;
     sync::restore_addon(&game_path, &name, force)?;
-    crate::debug_log::verbose(&app, "restore_addon", &format!("{name}: restored (force={force})"));
+    crate::debug_log::verbose(
+        &app,
+        "restore_addon",
+        &format!("{name}: restored (force={force})"),
+    );
     Ok(sync::get_installed_state(&game_path, &manifest))
 }
 
@@ -300,24 +640,40 @@ struct SyncCharactersPayload {
 /// preconditions like "not signed in" — is recorded via sync_log so the
 /// Settings > Sync Logs view can explain a silent auto-sync miss.
 #[tauri::command]
-pub async fn sync_guild_data_to_web(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+pub async fn sync_guild_data_to_web(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     let result = sync_guild_data_to_web_inner(&app, &state).await;
-    crate::sync_log::append_sync_log(&app, crate::types::SyncLogEntry {
-        at: crate::sync_log::now_ms(),
-        kind: "characters".to_string(),
-        success: result.is_ok(),
-        error: result.as_ref().err().cloned(),
-        raid_id: None,
-    });
+    crate::sync_log::append_sync_log(
+        &app,
+        crate::types::SyncLogEntry {
+            at: crate::sync_log::now_ms(),
+            kind: "characters".to_string(),
+            success: result.is_ok(),
+            error: result.as_ref().err().cloned(),
+            raid_id: None,
+            session_id: None,
+        },
+    );
     if result.is_ok() {
-        crate::debug_log::verbose(&app, "sync_guild_data_to_web", "synced character data to web");
+        crate::debug_log::verbose(
+            &app,
+            "sync_guild_data_to_web",
+            "synced character data to web",
+        );
     }
     crate::debug_log::log_on_err(&app, "sync_guild_data_to_web", result)
 }
 
-async fn sync_guild_data_to_web_inner(app: &AppHandle, state: &State<'_, AppState>) -> Result<(), String> {
+async fn sync_guild_data_to_web_inner(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+) -> Result<(), String> {
     let s = settings::load_settings(app)?;
-    let game_path = s.game_path().ok_or_else(|| "no game folder configured".to_string())?;
+    let game_path = s
+        .game_path()
+        .ok_or_else(|| "no game folder configured".to_string())?;
     let token = s
         .discord_token
         .as_deref()
@@ -326,7 +682,9 @@ async fn sync_guild_data_to_web_inner(app: &AppHandle, state: &State<'_, AppStat
 
     let data = crate::guild_sync::read_guild_sync_data(Path::new(&game_path))?;
     if data.is_empty() {
-        return Err("no character data found yet — log in as a Stalkers of Time member first".to_string());
+        return Err(
+            "no character data found yet — log in as a Stalkers of Time member first".to_string(),
+        );
     }
 
     // `account` is a local-only field (which WTF/Account/<name> folder this
@@ -341,8 +699,13 @@ async fn sync_guild_data_to_web_inner(app: &AppHandle, state: &State<'_, AppStat
         })
         .collect();
 
-    let url = format!("{}/characters/sync", crate::config::API_BASE_URL.trim_end_matches('/'));
-    let req = state.http.post(&url)
+    let url = format!(
+        "{}/characters/sync",
+        crate::config::API_BASE_URL.trim_end_matches('/')
+    );
+    let req = state
+        .http
+        .post(&url)
         .bearer_auth(token)
         .header("X-API-KEY", crate::config::API_KEY)
         .header("Accept", "application/json")
@@ -350,7 +713,10 @@ async fn sync_guild_data_to_web_inner(app: &AppHandle, state: &State<'_, AppStat
 
     let resp = req.send().await.map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
-        return Err(format!("HTTP {} while syncing character data", resp.status()));
+        return Err(format!(
+            "HTTP {} while syncing character data",
+            resp.status()
+        ));
     }
     Ok(())
 }
@@ -360,7 +726,9 @@ async fn sync_guild_data_to_web_inner(app: &AppHandle, state: &State<'_, AppStat
 /// this isn't scoped to "characters logged into on this WoW account" — one
 /// person running SoTGuildSync covers the whole roster.
 #[tauri::command]
-pub fn get_guild_roster(app: AppHandle) -> Result<Option<crate::guild_roster::GuildRosterData>, String> {
+pub fn get_guild_roster(
+    app: AppHandle,
+) -> Result<Option<crate::guild_roster::GuildRosterData>, String> {
     let s = settings::load_settings(&app)?;
     let Some(game_path) = s.game_path() else {
         return Ok(None);
@@ -377,24 +745,40 @@ struct SyncRosterPayload<'a> {
 /// roster in one batch, authenticated the same way character sync is.
 /// Same sync_log recording as sync_guild_data_to_web, see there.
 #[tauri::command]
-pub async fn sync_guild_roster_to_web(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+pub async fn sync_guild_roster_to_web(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     let result = sync_guild_roster_to_web_inner(&app, &state).await;
-    crate::sync_log::append_sync_log(&app, crate::types::SyncLogEntry {
-        at: crate::sync_log::now_ms(),
-        kind: "guild-roster".to_string(),
-        success: result.is_ok(),
-        error: result.as_ref().err().cloned(),
-        raid_id: None,
-    });
+    crate::sync_log::append_sync_log(
+        &app,
+        crate::types::SyncLogEntry {
+            at: crate::sync_log::now_ms(),
+            kind: "guild-roster".to_string(),
+            success: result.is_ok(),
+            error: result.as_ref().err().cloned(),
+            raid_id: None,
+            session_id: None,
+        },
+    );
     if result.is_ok() {
-        crate::debug_log::verbose(&app, "sync_guild_roster_to_web", "synced guild roster to web");
+        crate::debug_log::verbose(
+            &app,
+            "sync_guild_roster_to_web",
+            "synced guild roster to web",
+        );
     }
     crate::debug_log::log_on_err(&app, "sync_guild_roster_to_web", result)
 }
 
-async fn sync_guild_roster_to_web_inner(app: &AppHandle, state: &State<'_, AppState>) -> Result<(), String> {
+async fn sync_guild_roster_to_web_inner(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+) -> Result<(), String> {
     let s = settings::load_settings(app)?;
-    let game_path = s.game_path().ok_or_else(|| "no game folder configured".to_string())?;
+    let game_path = s
+        .game_path()
+        .ok_or_else(|| "no game folder configured".to_string())?;
     let token = s
         .discord_token
         .as_deref()
@@ -408,12 +792,19 @@ async fn sync_guild_roster_to_web_inner(app: &AppHandle, state: &State<'_, AppSt
         return Err("guild roster is empty".to_string());
     }
 
-    let url = format!("{}/guild-roster/sync", crate::config::API_BASE_URL.trim_end_matches('/'));
-    let req = state.http.post(&url)
+    let url = format!(
+        "{}/guild-roster/sync",
+        crate::config::API_BASE_URL.trim_end_matches('/')
+    );
+    let req = state
+        .http
+        .post(&url)
         .bearer_auth(token)
         .header("X-API-KEY", crate::config::API_KEY)
         .header("Accept", "application/json")
-        .json(&SyncRosterPayload { members: &data.members });
+        .json(&SyncRosterPayload {
+            members: &data.members,
+        });
 
     let resp = req.send().await.map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
@@ -447,7 +838,12 @@ pub fn get_debug_log(app: AppHandle) -> Result<Vec<crate::debug_log::DebugLogEnt
 /// last entry is "install attempted" with nothing after it, that's
 /// already a real diagnostic.
 #[tauri::command]
-pub fn log_client_event(app: AppHandle, level: String, context: String, message: String) -> Result<(), String> {
+pub fn log_client_event(
+    app: AppHandle,
+    level: String,
+    context: String,
+    message: String,
+) -> Result<(), String> {
     match level.as_str() {
         "error" => crate::debug_log::error(&app, &context, &message),
         "warn" => crate::debug_log::warn(&app, &context, &message),
@@ -482,7 +878,9 @@ pub struct SyncableRaid {
 #[tauri::command]
 pub fn get_captured_raids(app: AppHandle) -> Result<Vec<SyncableRaid>, String> {
     let s = settings::load_settings(&app)?;
-    let game_path = s.game_path().ok_or_else(|| "no game folder configured".to_string())?;
+    let game_path = s
+        .game_path()
+        .ok_or_else(|| "no game folder configured".to_string())?;
 
     let raids = crate::raid_loot_sync::read_captured_raids(Path::new(&game_path))?;
     let log = crate::sync_log::load_sync_log(&app).unwrap_or_default();
@@ -513,7 +911,11 @@ pub fn get_captured_raids(app: AppHandle) -> Result<Vec<SyncableRaid>, String> {
 pub fn set_raid_ignored(app: AppHandle, raid_id: String, ignored: bool) -> Result<(), String> {
     let result = crate::ignored_raids::set_raid_ignored(&app, &raid_id, ignored);
     if result.is_ok() {
-        crate::debug_log::verbose(&app, "set_raid_ignored", &format!("raid {raid_id}: ignored={ignored}"));
+        crate::debug_log::verbose(
+            &app,
+            "set_raid_ignored",
+            &format!("raid {raid_id}: ignored={ignored}"),
+        );
     }
     result
 }
@@ -543,16 +945,24 @@ pub async fn sync_raid_to_web(
 ) -> Result<(), String> {
     let result = sync_raid_to_web_inner(&app, &state, &raid_id, is_main).await;
 
-    crate::sync_log::append_sync_log(&app, crate::types::SyncLogEntry {
-        at: crate::sync_log::now_ms(),
-        kind: "raid".to_string(),
-        success: result.is_ok(),
-        error: result.as_ref().err().cloned(),
-        raid_id: Some(raid_id.clone()),
-    });
+    crate::sync_log::append_sync_log(
+        &app,
+        crate::types::SyncLogEntry {
+            at: crate::sync_log::now_ms(),
+            kind: "raid".to_string(),
+            success: result.is_ok(),
+            error: result.as_ref().err().cloned(),
+            raid_id: Some(raid_id.clone()),
+            session_id: None,
+        },
+    );
 
     if result.is_ok() {
-        crate::debug_log::verbose(&app, "sync_raid_to_web", &format!("synced raid {raid_id} to web (is_main={is_main})"));
+        crate::debug_log::verbose(
+            &app,
+            "sync_raid_to_web",
+            &format!("synced raid {raid_id} to web (is_main={is_main})"),
+        );
     }
     crate::debug_log::log_on_err(&app, "sync_raid_to_web", result)
 }
@@ -564,7 +974,9 @@ async fn sync_raid_to_web_inner(
     is_main: bool,
 ) -> Result<(), String> {
     let s = settings::load_settings(app)?;
-    let game_path = s.game_path().ok_or_else(|| "no game folder configured".to_string())?;
+    let game_path = s
+        .game_path()
+        .ok_or_else(|| "no game folder configured".to_string())?;
     let token = s
         .discord_token
         .as_deref()
@@ -575,10 +987,17 @@ async fn sync_raid_to_web_inner(
     let raid = raids
         .into_iter()
         .find(|r| r.raid_id == raid_id)
-        .ok_or_else(|| "raid not found — it may have aged out of the addon's capture window".to_string())?;
+        .ok_or_else(|| {
+            "raid not found — it may have aged out of the addon's capture window".to_string()
+        })?;
 
-    let url = format!("{}/raids/sync", crate::config::API_BASE_URL.trim_end_matches('/'));
-    let req = state.http.post(&url)
+    let url = format!(
+        "{}/raids/sync",
+        crate::config::API_BASE_URL.trim_end_matches('/')
+    );
+    let req = state
+        .http
+        .post(&url)
         .bearer_auth(token)
         .header("X-API-KEY", crate::config::API_KEY)
         .header("Accept", "application/json")
@@ -600,7 +1019,10 @@ async fn sync_raid_to_web_inner(
 /// unlike the addon-file readers, this data never gets inspected or
 /// transformed on the Rust side, just fetched and handed to the frontend.
 #[tauri::command]
-pub async fn get_my_loot(app: AppHandle, state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+pub async fn get_my_loot(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
     let result = get_my_loot_inner(&app, &state).await;
     if result.is_ok() {
         crate::debug_log::verbose(&app, "get_my_loot", "fetched my loot from web");
@@ -608,7 +1030,10 @@ pub async fn get_my_loot(app: AppHandle, state: State<'_, AppState>) -> Result<s
     crate::debug_log::log_on_err(&app, "get_my_loot", result)
 }
 
-async fn get_my_loot_inner(app: &AppHandle, state: &State<'_, AppState>) -> Result<serde_json::Value, String> {
+async fn get_my_loot_inner(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
     let s = settings::load_settings(app)?;
     let token = s
         .discord_token
@@ -616,8 +1041,13 @@ async fn get_my_loot_inner(app: &AppHandle, state: &State<'_, AppState>) -> Resu
         .filter(|t| !t.is_empty())
         .ok_or_else(|| "sign in with Discord first".to_string())?;
 
-    let url = format!("{}/my-loot", crate::config::API_BASE_URL.trim_end_matches('/'));
-    let req = state.http.get(&url)
+    let url = format!(
+        "{}/my-loot",
+        crate::config::API_BASE_URL.trim_end_matches('/')
+    );
+    let req = state
+        .http
+        .get(&url)
         .bearer_auth(token)
         .header("X-API-KEY", crate::config::API_KEY)
         .header("Accept", "application/json");
@@ -679,10 +1109,18 @@ pub async fn exchange_pair_code(
 }
 
 #[tauri::command]
-pub async fn pair_with_code(app: AppHandle, state: State<'_, AppState>, code: String) -> Result<Settings, String> {
+pub async fn pair_with_code(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    code: String,
+) -> Result<Settings, String> {
     let result = exchange_pair_code(&app, &state.http, code).await;
     if let Ok(s) = &result {
-        crate::debug_log::verbose(&app, "pair_with_code", &format!("paired as {:?}", s.discord_username));
+        crate::debug_log::verbose(
+            &app,
+            "pair_with_code",
+            &format!("paired as {:?}", s.discord_username),
+        );
     }
     crate::debug_log::log_on_err(&app, "pair_with_code", result)
 }
@@ -690,11 +1128,17 @@ pub async fn pair_with_code(app: AppHandle, state: State<'_, AppState>, code: St
 /// Best-effort server-side revoke, then always clears the local credential
 /// regardless of whether the server call succeeded (e.g. offline).
 #[tauri::command]
-pub async fn clear_discord_login(app: AppHandle, state: State<'_, AppState>) -> Result<Settings, String> {
+pub async fn clear_discord_login(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Settings, String> {
     let mut s = settings::load_settings(&app)?;
 
     if let Some(token) = s.discord_token.as_deref().filter(|t| !t.is_empty()) {
-        let url = format!("{}/unpair", crate::config::API_BASE_URL.trim_end_matches('/'));
+        let url = format!(
+            "{}/unpair",
+            crate::config::API_BASE_URL.trim_end_matches('/')
+        );
         let _ = state
             .http
             .post(&url)
@@ -729,7 +1173,9 @@ async fn run_sync_inner(
     addon_enabled: std::collections::HashMap<String, bool>,
 ) -> Result<CombinedSyncResult, String> {
     let mut s = settings::load_settings(app)?;
-    let game_path = s.game_path().ok_or_else(|| "no game folder configured".to_string())?;
+    let game_path = s
+        .game_path()
+        .ok_or_else(|| "no game folder configured".to_string())?;
 
     let addons = sync::sync_addons(app, &game_path, &manifest.addons, &addon_enabled).await;
     let wtf_files = sync::sync_wtf_files(app, &game_path, &manifest.wtf_files).await;
@@ -809,10 +1255,17 @@ pub fn launch_game(app: AppHandle) -> Result<(), String> {
 
 fn launch_game_inner(app: &AppHandle) -> Result<(), String> {
     let s = settings::load_settings(app)?;
-    let game_path = s.game_path().ok_or_else(|| "no game folder configured".to_string())?;
+    let game_path = s
+        .game_path()
+        .ok_or_else(|| "no game folder configured".to_string())?;
     let game_root = PathBuf::from(&game_path);
 
-    if let Some(custom) = s.launch_command.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
+    if let Some(custom) = s
+        .launch_command
+        .as_deref()
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+    {
         let resolved = custom.replace("{game_path}", &game_path);
         run_shell_command(&resolved, &game_root)?;
     } else {
@@ -887,7 +1340,10 @@ const LUTRIS_LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 /// Returns a plain io::Error (not yet stringified) so the caller can tell a
 /// missing binary (NotFound, to fall back to Flatpak) apart from any other
 /// failure.
-fn run_with_timeout(mut cmd: std::process::Command, timeout: std::time::Duration) -> std::io::Result<std::process::Output> {
+fn run_with_timeout(
+    mut cmd: std::process::Command,
+    timeout: std::time::Duration,
+) -> std::io::Result<std::process::Output> {
     use std::process::Stdio;
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = cmd.spawn()?;
@@ -899,7 +1355,10 @@ fn run_with_timeout(mut cmd: std::process::Command, timeout: std::time::Duration
                 if start.elapsed() > timeout {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "timed out waiting for Lutris"));
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "timed out waiting for Lutris",
+                    ));
                 }
                 std::thread::sleep(std::time::Duration::from_millis(150));
             }
@@ -980,7 +1439,9 @@ pub fn list_lutris_games() -> Result<Vec<crate::types::LutrisGame>, String> {
 #[tauri::command]
 pub fn get_wtf_accounts(app: AppHandle) -> Result<Vec<String>, String> {
     let s = settings::load_settings(&app)?;
-    let game_path = s.game_path().ok_or_else(|| "no game folder configured".to_string())?;
+    let game_path = s
+        .game_path()
+        .ok_or_else(|| "no game folder configured".to_string())?;
     Ok(crate::wtf_sync::list_wtf_accounts(&game_path))
 }
 
@@ -1008,9 +1469,16 @@ pub fn set_wtf_sync_auto_push(app: AppHandle, enabled: bool) -> Result<Settings,
 /// using WtfAccountSyncState::default() - auto_sync_enabled: true - for one
 /// that's never been synced yet).
 #[tauri::command]
-pub fn set_wtf_account_auto_sync_enabled(app: AppHandle, account: String, enabled: bool) -> Result<Settings, String> {
+pub fn set_wtf_account_auto_sync_enabled(
+    app: AppHandle,
+    account: String,
+    enabled: bool,
+) -> Result<Settings, String> {
     let mut s = settings::load_settings(&app)?;
-    s.wtf_account_sync.entry(account.clone()).or_default().auto_sync_enabled = enabled;
+    s.wtf_account_sync
+        .entry(account.clone())
+        .or_default()
+        .auto_sync_enabled = enabled;
     settings::save_settings(&app, &s)?;
     crate::debug_log::verbose(
         &app,
@@ -1035,12 +1503,18 @@ pub struct WtfSyncInfo {
 /// whether it exists locally on this device — see WtfCloudAccountEntry's
 /// doc comment for why the sync table needs this alongside get_wtf_accounts.
 #[tauri::command]
-pub async fn get_wtf_cloud_accounts(app: AppHandle, state: State<'_, AppState>) -> Result<Vec<crate::types::WtfCloudAccountEntry>, String> {
+pub async fn get_wtf_cloud_accounts(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::types::WtfCloudAccountEntry>, String> {
     let result = get_wtf_cloud_accounts_inner(&app, &state).await;
     crate::debug_log::log_on_err(&app, "get_wtf_cloud_accounts", result)
 }
 
-async fn get_wtf_cloud_accounts_inner(app: &AppHandle, state: &State<'_, AppState>) -> Result<Vec<crate::types::WtfCloudAccountEntry>, String> {
+async fn get_wtf_cloud_accounts_inner(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+) -> Result<Vec<crate::types::WtfCloudAccountEntry>, String> {
     let s = settings::load_settings(app)?;
     let token = s
         .discord_token
@@ -1054,12 +1528,20 @@ async fn get_wtf_cloud_accounts_inner(app: &AppHandle, state: &State<'_, AppStat
 /// show "up to date" / "local changes pending" / "cloud has newer changes"
 /// per row without actually pushing or pulling anything.
 #[tauri::command]
-pub async fn get_wtf_sync_info(app: AppHandle, state: State<'_, AppState>, account: String) -> Result<WtfSyncInfo, String> {
+pub async fn get_wtf_sync_info(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    account: String,
+) -> Result<WtfSyncInfo, String> {
     let result = get_wtf_sync_info_inner(&app, &state, &account).await;
     crate::debug_log::log_on_err(&app, "get_wtf_sync_info", result)
 }
 
-async fn get_wtf_sync_info_inner(app: &AppHandle, state: &State<'_, AppState>, account: &str) -> Result<WtfSyncInfo, String> {
+async fn get_wtf_sync_info_inner(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    account: &str,
+) -> Result<WtfSyncInfo, String> {
     let s = settings::load_settings(app)?;
     let token = s
         .discord_token
@@ -1069,7 +1551,10 @@ async fn get_wtf_sync_info_inner(app: &AppHandle, state: &State<'_, AppState>, a
 
     let status = crate::wtf_sync::fetch_wtf_status(&state.http, token, account).await?;
 
-    let known_fingerprint = s.wtf_account_sync.get(account).and_then(|a| a.last_synced_fingerprint.clone());
+    let known_fingerprint = s
+        .wtf_account_sync
+        .get(account)
+        .and_then(|a| a.last_synced_fingerprint.clone());
     let local_changed = s
         .game_path()
         .and_then(|game_path| crate::wtf_sync::account_dir(&game_path, account).ok())
@@ -1077,7 +1562,10 @@ async fn get_wtf_sync_info_inner(app: &AppHandle, state: &State<'_, AppState>, a
         .map(|fp| Some(fp) != known_fingerprint)
         .unwrap_or(false);
 
-    Ok(WtfSyncInfo { status, local_changed })
+    Ok(WtfSyncInfo {
+        status,
+        local_changed,
+    })
 }
 
 /// Zips `account`'s WTF/Account folder and uploads it, overwriting whatever
@@ -1085,14 +1573,26 @@ async fn get_wtf_sync_info_inner(app: &AppHandle, state: &State<'_, AppState>, a
 /// (naming why) unless `force` is set if the cloud copy changed since this
 /// device last touched it — see wtf_sync.rs's module doc for the conflict model.
 #[tauri::command]
-pub async fn wtf_push(app: AppHandle, state: State<'_, AppState>, account: String, force: bool) -> Result<Settings, String> {
+pub async fn wtf_push(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    account: String,
+    force: bool,
+) -> Result<Settings, String> {
     let result = wtf_push_inner(&app, &state, &account, force).await;
     crate::debug_log::log_on_err(&app, "wtf_push", result)
 }
 
-async fn wtf_push_inner(app: &AppHandle, state: &State<'_, AppState>, account: &str, force: bool) -> Result<Settings, String> {
+async fn wtf_push_inner(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    account: &str,
+    force: bool,
+) -> Result<Settings, String> {
     let mut s = settings::load_settings(app)?;
-    let game_path = s.game_path().ok_or_else(|| "no game folder configured".to_string())?;
+    let game_path = s
+        .game_path()
+        .ok_or_else(|| "no game folder configured".to_string())?;
     let token = s
         .discord_token
         .clone()
@@ -1100,7 +1600,9 @@ async fn wtf_push_inner(app: &AppHandle, state: &State<'_, AppState>, account: &
         .ok_or_else(|| "sign in with Discord first".to_string())?;
 
     if crate::wtf_sync::is_wow_running() {
-        return Err("close World of Warcraft before backing up or restoring your settings".to_string());
+        return Err(
+            "close World of Warcraft before backing up or restoring your settings".to_string(),
+        );
     }
 
     let dir = crate::wtf_sync::account_dir(&game_path, account)?;
@@ -1133,7 +1635,11 @@ async fn wtf_push_inner(app: &AppHandle, state: &State<'_, AppState>, account: &
         },
     );
     settings::save_settings(app, &s)?;
-    crate::debug_log::verbose(app, "wtf_push", &format!("pushed wtf account {account} to cloud (force={force})"));
+    crate::debug_log::verbose(
+        app,
+        "wtf_push",
+        &format!("pushed wtf account {account} to cloud (force={force})"),
+    );
     Ok(s)
 }
 
@@ -1144,14 +1650,26 @@ async fn wtf_push_inner(app: &AppHandle, state: &State<'_, AppState>, account: &
 /// set if the local folder changed since this device last synced — see
 /// wtf_sync.rs's module doc for the conflict model.
 #[tauri::command]
-pub async fn wtf_pull(app: AppHandle, state: State<'_, AppState>, account: String, force: bool) -> Result<Settings, String> {
+pub async fn wtf_pull(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    account: String,
+    force: bool,
+) -> Result<Settings, String> {
     let result = wtf_pull_inner(&app, &state, &account, force).await;
     crate::debug_log::log_on_err(&app, "wtf_pull", result)
 }
 
-async fn wtf_pull_inner(app: &AppHandle, state: &State<'_, AppState>, account: &str, force: bool) -> Result<Settings, String> {
+async fn wtf_pull_inner(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    account: &str,
+    force: bool,
+) -> Result<Settings, String> {
     let mut s = settings::load_settings(app)?;
-    let game_path = s.game_path().ok_or_else(|| "no game folder configured".to_string())?;
+    let game_path = s
+        .game_path()
+        .ok_or_else(|| "no game folder configured".to_string())?;
     let token = s
         .discord_token
         .clone()
@@ -1159,7 +1677,9 @@ async fn wtf_pull_inner(app: &AppHandle, state: &State<'_, AppState>, account: &
         .ok_or_else(|| "sign in with Discord first".to_string())?;
 
     if crate::wtf_sync::is_wow_running() {
-        return Err("close World of Warcraft before backing up or restoring your settings".to_string());
+        return Err(
+            "close World of Warcraft before backing up or restoring your settings".to_string(),
+        );
     }
 
     let dir = crate::wtf_sync::account_dir_for_pull(&game_path, account)?;
@@ -1200,6 +1720,10 @@ async fn wtf_pull_inner(app: &AppHandle, state: &State<'_, AppState>, account: &
         },
     );
     settings::save_settings(app, &s)?;
-    crate::debug_log::verbose(app, "wtf_pull", &format!("pulled wtf account {account} from cloud (force={force})"));
+    crate::debug_log::verbose(
+        app,
+        "wtf_pull",
+        &format!("pulled wtf account {account} from cloud (force={force})"),
+    );
     Ok(s)
 }

@@ -897,6 +897,7 @@ mod tests {
     fn is_addon_wanted_applies_category_defaults() {
         let mandatory = AddonEntry {
             name: "M".into(),
+            description: String::new(),
             version: "1".into(),
             url: String::new(),
             sha256: String::new(),
@@ -978,6 +979,7 @@ mod tests {
         Manifest {
             addons: vec![AddonEntry {
                 name: "AddonA".to_string(),
+                description: String::new(),
                 version: "1.0".to_string(),
                 url: String::new(),
                 sha256: "deadbeef".to_string(),

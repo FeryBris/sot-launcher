@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
 import { PhArrowsClockwise, PhCloudArrowDown, PhCloudArrowUp, PhCircleNotch } from '@phosphor-icons/vue'
+import { formatDateTime } from '../format'
 import {
   store,
   refreshWtfAccountRows,
@@ -30,7 +31,7 @@ function onAutoSyncToggle(account: string, e: Event) {
 // PHP's filemtime(), not the milliseconds the Date constructor expects.
 // Passing it through unconverted landed every date around 21 Jan 1970.
 function formatTime(at: number | null): string {
-  return at ? new Date(at * 1000).toLocaleString() : 'Never'
+  return at ? formatDateTime(new Date(at * 1000)) : 'Never'
 }
 
 function formatBytes(size: number | null): string {

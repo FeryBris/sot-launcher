@@ -5,6 +5,7 @@ import { relaunch } from '@tauri-apps/plugin-process';
 import { getVersion } from '@tauri-apps/api/app';
 import HomeView from './views/Home.vue';
 import AddonsView from './views/Addons.vue';
+import LogsView from './views/Logs.vue';
 import RaidsView from './views/Raids.vue';
 import SettingsView from './views/Settings.vue';
 import PlayBar from './components/PlayBar.vue';
@@ -19,7 +20,7 @@ import {
   setTrayPrimaryLabel,
 } from './api';
 
-type Tab = 'home' | 'addons' | 'raids' | 'settings';
+type Tab = 'home' | 'addons' | 'logs' | 'raids' | 'settings';
 
 const tab = ref<Tab>('home');
 const appVersion = ref('');
@@ -177,6 +178,9 @@ onUnmounted(() => {
         <button class="nav-item" :class="{ active: tab === 'addons' }" @click="tab = 'addons'">
           Addons
         </button>
+        <button class="nav-item" :class="{ active: tab === 'logs' }" @click="tab = 'logs'">
+          Logs
+        </button>
         <button
           v-if="store.settings.isOfficer"
           class="nav-item"
@@ -239,6 +243,7 @@ onUnmounted(() => {
     <main class="content">
       <HomeView v-show="tab === 'home'" />
       <AddonsView v-show="tab === 'addons'" />
+      <LogsView v-show="tab === 'logs'" />
       <RaidsView v-if="store.settings.isOfficer" v-show="tab === 'raids'" />
       <SettingsView v-show="tab === 'settings'" />
     </main>

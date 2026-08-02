@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import * as api from '../api'
+import { formatDateTime } from '../format'
 import { store, saveVerboseLogging } from '../store'
 import type { SyncLogEntry } from '../types'
 
@@ -25,7 +26,7 @@ async function load() {
 onMounted(load)
 
 function formatTime(at: number): string {
-  return new Date(at).toLocaleString()
+  return formatDateTime(new Date(at))
 }
 
 function kindLabel(kind: SyncLogEntry['kind']): string {

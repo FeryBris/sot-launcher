@@ -1,8 +1,13 @@
+mod combat_log_parser;
+mod combat_log_session;
+mod combat_log_watcher;
+mod combat_log_zone;
 mod commands;
 mod config;
 mod debug_log;
 mod guild_roster;
 mod guild_sync;
+mod ignored_combat_sessions;
 mod ignored_raids;
 mod raid_loot_sync;
 mod settings;
@@ -114,6 +119,7 @@ pub fn run() {
         Ok(s) => {
           if let Some(path) = s.game_path() {
             watcher::watch_guild_data(app.handle(), std::path::Path::new(&path));
+            combat_log_watcher::watch_combat_log(app.handle(), std::path::Path::new(&path));
           }
         }
         Err(e) => debug_log::error(app.handle(), "startup_load_settings", &e),
@@ -212,6 +218,11 @@ pub fn run() {
       commands::list_lutris_games,
       commands::get_guild_sync_data,
       commands::sync_guild_data_to_web,
+      commands::get_captured_combat_sessions,
+      commands::set_combat_session_ignored,
+      commands::sync_combat_session_to_web,
+      commands::set_combat_log_auto_sync,
+      commands::reprocess_combat_log,
       commands::get_guild_roster,
       commands::sync_guild_roster_to_web,
       commands::get_sync_log,
