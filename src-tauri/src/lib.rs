@@ -65,8 +65,24 @@ fn dispatch_pair_code(app: &tauri::AppHandle, code: String) {
         let _ = handle.emit("discord-paired", &settings);
       }
       Err(e) => {
-        debug_log::error(&handle, "discord_pair", &e);
-        let _ = handle.emit("discord-pair-error", &e);
+        // Pairing codes are single-use server-side (Cache::pull) - the
+        // bridge page's "open app" link staying clickable after the
+        // automatic sot-launcher:// navigation already consumed it (or a
+        // second on_open_url/single-instance delivery of the same URL)
+        // means this fails every time on a redundant attempt, even though
+        // nothing is actually wrong. Only surface it as a real error when
+        // we're not already paired - a genuinely invalid/expired code
+        // still needs to be visible then.
+        let already_paired = settings::load_settings(&handle)
+          .map(|s| s.discord_token.as_deref().is_some_and(|t| !t.is_empty()))
+          .unwrap_or(false);
+
+        if already_paired {
+          debug_log::verbose(&handle, "discord_pair", &format!("ignored pair failure, already paired: {e}"));
+        } else {
+          debug_log::error(&handle, "discord_pair", &e);
+          let _ = handle.emit("discord-pair-error", &e);
+        }
       }
     }
   });
