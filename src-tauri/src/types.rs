@@ -152,11 +152,14 @@ pub struct Settings {
     /// than being derived from the game folder like everything else.
     #[serde(default)]
     pub addon_enabled: std::collections::HashMap<String, bool>,
-    /// Personal Bearer token from Discord pairing, sent on requests that
-    /// need per-player identity (distinct from the shared, compile-time
-    /// baked-in API key — see config.rs).
-    #[serde(default)]
-    pub discord_token: Option<String>,
+    /// Whether a Discord pairing token is currently held in the OS
+    /// keychain (see keychain.rs) — the actual token never lives in this
+    /// struct or settings.json, so it can never round-trip to the
+    /// frontend or an on-disk config bundle. Always recomputed from the
+    /// keychain at load time (see settings::load_settings), never trusted
+    /// from a deserialized settings.json.
+    #[serde(skip_deserializing, default)]
+    pub discord_signed_in: bool,
     #[serde(default)]
     pub discord_username: Option<String>,
     #[serde(default)]

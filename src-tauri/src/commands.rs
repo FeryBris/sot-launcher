@@ -216,10 +216,7 @@ async fn sync_encounter_to_web_inner(
     http: &reqwest::Client,
     encounter: &crate::combat_log_session::EncounterReport,
 ) -> Result<(), String> {
-    let s = settings::load_settings(app)?;
-    let token = s
-        .discord_token
-        .as_deref()
+    let token = crate::keychain::get_token()
         .filter(|t| !t.is_empty())
         .ok_or_else(|| "sign in with Discord first".to_string())?;
 
@@ -518,7 +515,7 @@ pub fn get_installed_state(app: AppHandle, manifest: Manifest) -> Result<Install
     let game_path = s
         .game_path()
         .ok_or_else(|| "no game folder configured".to_string())?;
-    Ok(sync::get_installed_state(&game_path, &manifest))
+    Ok(sync::get_installed_state(Some(&app), &game_path, &manifest))
 }
 
 /// Immediate disable/enable for a single addon (managed or custom). Managed
@@ -542,7 +539,7 @@ pub fn set_addon_disabled(
         "set_addon_disabled",
         &format!("{name}: disabled={disabled}"),
     );
-    Ok(sync::get_installed_state(&game_path, &manifest))
+    Ok(sync::get_installed_state(Some(&app), &game_path, &manifest))
 }
 
 /// Moves a tracked addon (managed or custom) to Interface/.DeletedAddons
@@ -569,7 +566,7 @@ pub fn delete_addon(
     }
 
     crate::debug_log::verbose(&app, "delete_addon", &format!("{name}: moved to trash"));
-    Ok(sync::get_installed_state(&game_path, &manifest))
+    Ok(sync::get_installed_state(Some(&app), &game_path, &manifest))
 }
 
 /// Permanently purges a trashed addon's files and drops its tracking entry
@@ -587,7 +584,7 @@ pub fn delete_addon_forever(
         .ok_or_else(|| "no game folder configured".to_string())?;
     sync::delete_addon_forever(&game_path, &name)?;
     crate::debug_log::verbose(&app, "delete_addon_forever", &format!("{name}: purged"));
-    Ok(sync::get_installed_state(&game_path, &manifest))
+    Ok(sync::get_installed_state(Some(&app), &game_path, &manifest))
 }
 
 /// Moves a trashed addon back to Interface/AddOns. If a different addon
@@ -613,7 +610,7 @@ pub fn restore_addon(
         "restore_addon",
         &format!("{name}: restored (force={force})"),
     );
-    Ok(sync::get_installed_state(&game_path, &manifest))
+    Ok(sync::get_installed_state(Some(&app), &game_path, &manifest))
 }
 
 /// Reads the SoTCharacterSync addon's current SavedVariables snapshot for
@@ -674,9 +671,7 @@ async fn sync_guild_data_to_web_inner(
     let game_path = s
         .game_path()
         .ok_or_else(|| "no game folder configured".to_string())?;
-    let token = s
-        .discord_token
-        .as_deref()
+    let token = crate::keychain::get_token()
         .filter(|t| !t.is_empty())
         .ok_or_else(|| "sign in with Discord first".to_string())?;
 
@@ -779,9 +774,7 @@ async fn sync_guild_roster_to_web_inner(
     let game_path = s
         .game_path()
         .ok_or_else(|| "no game folder configured".to_string())?;
-    let token = s
-        .discord_token
-        .as_deref()
+    let token = crate::keychain::get_token()
         .filter(|t| !t.is_empty())
         .ok_or_else(|| "sign in with Discord first".to_string())?;
 
@@ -977,9 +970,7 @@ async fn sync_raid_to_web_inner(
     let game_path = s
         .game_path()
         .ok_or_else(|| "no game folder configured".to_string())?;
-    let token = s
-        .discord_token
-        .as_deref()
+    let token = crate::keychain::get_token()
         .filter(|t| !t.is_empty())
         .ok_or_else(|| "sign in with Discord first".to_string())?;
 
@@ -1031,13 +1022,10 @@ pub async fn get_my_loot(
 }
 
 async fn get_my_loot_inner(
-    app: &AppHandle,
+    _app: &AppHandle,
     state: &State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
-    let s = settings::load_settings(app)?;
-    let token = s
-        .discord_token
-        .as_deref()
+    let token = crate::keychain::get_token()
         .filter(|t| !t.is_empty())
         .ok_or_else(|| "sign in with Discord first".to_string())?;
 
@@ -1100,7 +1088,8 @@ pub async fn exchange_pair_code(
 
     let body: PairResponse = resp.json().await.map_err(|e| e.to_string())?;
 
-    s.discord_token = Some(body.token);
+    crate::keychain::set_token(&body.token)?;
+    s.discord_signed_in = true;
     s.discord_username = body.user.discord_username;
     s.discord_avatar = body.user.discord_avatar;
     s.is_officer = body.user.is_officer;
@@ -1134,7 +1123,7 @@ pub async fn clear_discord_login(
 ) -> Result<Settings, String> {
     let mut s = settings::load_settings(&app)?;
 
-    if let Some(token) = s.discord_token.as_deref().filter(|t| !t.is_empty()) {
+    if let Some(token) = crate::keychain::get_token().filter(|t| !t.is_empty()) {
         let url = format!(
             "{}/unpair",
             crate::config::API_BASE_URL.trim_end_matches('/')
@@ -1148,7 +1137,8 @@ pub async fn clear_discord_login(
             .await;
     }
 
-    s.discord_token = None;
+    crate::keychain::delete_token();
+    s.discord_signed_in = false;
     s.discord_username = None;
     s.discord_avatar = None;
     s.is_officer = false;
@@ -1306,7 +1296,7 @@ fn launch_game_inner(app: &AppHandle) -> Result<(), String> {
     // Only bother watching if there's actually something to do once the
     // game closes — no point polling in the background for a feature the
     // player hasn't opted into.
-    if s.wtf_sync_auto_push && s.discord_token.as_deref().is_some_and(|t| !t.is_empty()) {
+    if s.wtf_sync_auto_push && crate::keychain::get_token().is_some_and(|t| !t.is_empty()) {
         crate::wtf_sync::watch_for_game_close(app.clone());
     }
     crate::debug_log::verbose(app, "launch_game", "launched the game");
@@ -1512,16 +1502,13 @@ pub async fn get_wtf_cloud_accounts(
 }
 
 async fn get_wtf_cloud_accounts_inner(
-    app: &AppHandle,
+    _app: &AppHandle,
     state: &State<'_, AppState>,
 ) -> Result<Vec<crate::types::WtfCloudAccountEntry>, String> {
-    let s = settings::load_settings(app)?;
-    let token = s
-        .discord_token
-        .as_deref()
+    let token = crate::keychain::get_token()
         .filter(|t| !t.is_empty())
         .ok_or_else(|| "sign in with Discord first".to_string())?;
-    crate::wtf_sync::fetch_wtf_cloud_accounts(&state.http, token).await
+    crate::wtf_sync::fetch_wtf_cloud_accounts(&state.http, &token).await
 }
 
 /// Cloud status + local-change check for one account, for the sync table to
@@ -1543,13 +1530,11 @@ async fn get_wtf_sync_info_inner(
     account: &str,
 ) -> Result<WtfSyncInfo, String> {
     let s = settings::load_settings(app)?;
-    let token = s
-        .discord_token
-        .as_deref()
+    let token = crate::keychain::get_token()
         .filter(|t| !t.is_empty())
         .ok_or_else(|| "sign in with Discord first".to_string())?;
 
-    let status = crate::wtf_sync::fetch_wtf_status(&state.http, token, account).await?;
+    let status = crate::wtf_sync::fetch_wtf_status(&state.http, &token, account).await?;
 
     let known_fingerprint = s
         .wtf_account_sync
@@ -1593,9 +1578,7 @@ async fn wtf_push_inner(
     let game_path = s
         .game_path()
         .ok_or_else(|| "no game folder configured".to_string())?;
-    let token = s
-        .discord_token
-        .clone()
+    let token = crate::keychain::get_token()
         .filter(|t| !t.is_empty())
         .ok_or_else(|| "sign in with Discord first".to_string())?;
 
@@ -1670,9 +1653,7 @@ async fn wtf_pull_inner(
     let game_path = s
         .game_path()
         .ok_or_else(|| "no game folder configured".to_string())?;
-    let token = s
-        .discord_token
-        .clone()
+    let token = crate::keychain::get_token()
         .filter(|t| !t.is_empty())
         .ok_or_else(|| "sign in with Discord first".to_string())?;
 

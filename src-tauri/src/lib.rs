@@ -9,6 +9,7 @@ mod guild_roster;
 mod guild_sync;
 mod ignored_combat_sessions;
 mod ignored_raids;
+mod keychain;
 mod raid_loot_sync;
 mod settings;
 mod sync;
@@ -74,7 +75,7 @@ fn dispatch_pair_code(app: &tauri::AppHandle, code: String) {
         // we're not already paired - a genuinely invalid/expired code
         // still needs to be visible then.
         let already_paired = settings::load_settings(&handle)
-          .map(|s| s.discord_token.as_deref().is_some_and(|t| !t.is_empty()))
+          .map(|s| s.discord_signed_in)
           .unwrap_or(false);
 
         if already_paired {

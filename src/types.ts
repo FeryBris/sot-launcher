@@ -38,7 +38,9 @@ export interface Settings {
   closeToTray: boolean
   autoLaunch: boolean
   addonEnabled: Record<string, boolean>
-  discordToken: string | null
+  /** Whether a Discord pairing token is currently held in the OS keychain —
+   *  the actual token never reaches the frontend, only this presence flag. */
+  discordSignedIn: boolean
   discordUsername: string | null
   discordAvatar: string | null
   /** Whether the paired Discord user holds officer guild rank, as of the last pairing exchange. */

@@ -28,6 +28,11 @@ interface Store {
   apiBaseUrl: string
   manifest: Manifest | null
   installed: InstalledState | null
+  /** Set when the last refreshInstalledState() call failed - installed
+   *  itself is left at whatever it was before (not reset to null), same
+   *  "don't flash to empty on a transient failure" reasoning as
+   *  guildSyncData/guildRoster below. */
+  installedError: string
   /** Explicit user overrides only; absence falls back to the category default. */
   addonEnabled: Record<string, boolean>
   loadingManifest: boolean
@@ -44,6 +49,11 @@ interface Store {
   /** Full guild roster from the SoTGuildSync addon — unlike guildSyncData,
    *  not scoped to characters logged into on this WoW account. */
   guildRoster: GuildRosterData | null
+  /** Set when the last refreshGuildRoster() call failed to read/parse the
+   *  addon's SavedVariables file - guildRoster is left at whatever was last
+   *  successfully read (see refreshGuildRoster's own comment for why:
+   *  almost always a mid-write race, not a real "no data" state). */
+  guildRosterReadError: string
   guildRosterSyncing: boolean
   guildRosterSyncError: string
   guildRosterLastSyncedAt: number | null
@@ -54,6 +64,9 @@ interface Store {
   myLootError: string
   /** WTF/Account/* subfolders found locally. */
   wtfAccounts: string[]
+  /** Set when the last refreshWtfAccounts() call failed - wtfAccounts is
+   *  left at whatever it was before rather than reset to []. */
+  wtfAccountsError: string
   /** Union of local folders and cloud backups, each with sync status —
    *  populated by refreshWtfAccountRows() when the Settings Backup dialog opens. */
   wtfAccountRows: WtfAccountRow[]
@@ -75,7 +88,7 @@ export const store = reactive<Store>({
     closeToTray: true,
     autoLaunch: false,
     addonEnabled: {},
-    discordToken: null,
+    discordSignedIn: false,
     discordUsername: null,
     discordAvatar: null,
     isOfficer: false,
@@ -88,6 +101,7 @@ export const store = reactive<Store>({
   apiBaseUrl: '',
   manifest: null,
   installed: null,
+  installedError: '',
   addonEnabled: {},
   loadingManifest: false,
   manifestError: '',
@@ -101,6 +115,7 @@ export const store = reactive<Store>({
   guildSyncError: '',
   guildLastSyncedAt: null,
   guildRoster: null,
+  guildRosterReadError: '',
   guildRosterSyncing: false,
   guildRosterSyncError: '',
   guildRosterLastSyncedAt: null,
@@ -108,6 +123,7 @@ export const store = reactive<Store>({
   myLootLoading: false,
   myLootError: '',
   wtfAccounts: [],
+  wtfAccountsError: '',
   wtfAccountRows: [],
   wtfAccountRowsLoading: false,
   wtfSyncingAccount: null,
@@ -160,7 +176,7 @@ function guildSyncSnapshot(data: typeof store.guildSyncData): string {
  *  A failed attempt doesn't update the snapshot, so it's retried on the
  *  next poll once the debounce window passes. */
 async function maybeAutoSyncGuildData() {
-  if (!store.settings.discordToken) return
+  if (!store.settings.discordSignedIn) return
   if (store.guildSyncing) return
 
   const snapshot = guildSyncSnapshot(store.guildSyncData)
@@ -238,7 +254,7 @@ export async function init() {
   // Mirrors the game-close trigger: launcher open is the other natural
   // moment to reconcile a device's accounts against the cloud, before the
   // player starts playing on one.
-  if (store.settings.wtfSyncAutoPull && store.settings.discordToken) {
+  if (store.settings.wtfSyncAutoPull && store.settings.discordSignedIn) {
     void autoSyncAllWtfAccounts('pull')
   }
 }
@@ -267,7 +283,7 @@ async function autoSyncAllWtfAccounts(direction: 'push' | 'pull') {
  *  since raid loot only ever changes after a raid night; the "My Loot"
  *  tab can call this again to manually refresh. */
 export async function refreshMyLoot() {
-  if (!store.settings.discordToken) {
+  if (!store.settings.discordSignedIn) {
     store.myLoot = null
     return
   }
@@ -317,12 +333,21 @@ async function syncGuildDataToWeb() {
 export async function refreshGuildRoster() {
   if (!currentGamePath()) {
     store.guildRoster = null
+    store.guildRosterReadError = ''
     return
   }
   try {
     store.guildRoster = await api.getGuildRoster()
-  } catch {
-    store.guildRoster = null
+    store.guildRosterReadError = ''
+  } catch (e) {
+    // Same reasoning as refreshGuildSyncData above: a parse failure here
+    // almost always means the file watcher caught SoTGuildSync.lua
+    // mid-write (e.g. the logout flush), not a real "no roster" state -
+    // keep whatever was last successfully read rather than flashing the
+    // whole roster to empty; the next file-changed event (or app restart)
+    // will pick up the completed write.
+    console.warn('Failed to read guild roster, keeping last known data', e)
+    store.guildRosterReadError = String(e)
   }
 }
 
@@ -335,7 +360,7 @@ let lastAutoRosterSyncedAt = 0
  *  join — there's no per-member identity to track here, just "has the
  *  addon written a newer snapshot than what we last sent". */
 async function maybeAutoSyncGuildRoster() {
-  if (!store.settings.discordToken) return
+  if (!store.settings.discordSignedIn) return
   if (store.guildRosterSyncing) return
   if (!store.guildRoster || store.guildRoster.members.length === 0) return
 
@@ -386,12 +411,14 @@ export async function signOutDiscord() {
 export async function refreshWtfAccounts() {
   if (!currentGamePath()) {
     store.wtfAccounts = []
+    store.wtfAccountsError = ''
     return
   }
   try {
     store.wtfAccounts = await api.getWtfAccounts()
-  } catch {
-    store.wtfAccounts = []
+    store.wtfAccountsError = ''
+  } catch (e) {
+    store.wtfAccountsError = String(e)
   }
 }
 
@@ -402,7 +429,7 @@ export async function refreshWtfAccounts() {
  *  kept live in the background like guild data, since it means one status
  *  round-trip per account. */
 export async function refreshWtfAccountRows() {
-  if (!store.settings.discordToken) {
+  if (!store.settings.discordSignedIn) {
     store.wtfAccountRows = []
     return
   }
@@ -564,12 +591,17 @@ export async function refreshManifest() {
 export async function refreshInstalledState() {
   if (!store.manifest || !currentGamePath()) {
     store.installed = null
+    store.installedError = ''
     return
   }
   try {
     store.installed = await api.getInstalledState(store.manifest)
-  } catch {
-    store.installed = null
+    store.installedError = ''
+  } catch (e) {
+    // Keep whatever was last successfully read rather than flashing the
+    // whole addon list to "not installed" on a transient failure - the
+    // error is still surfaced via installedError so it's not silent.
+    store.installedError = String(e)
   }
 }
 

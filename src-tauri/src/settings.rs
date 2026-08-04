@@ -25,11 +25,35 @@ pub fn load_settings(app: &AppHandle) -> Result<Settings, String> {
         return Ok(Settings {
             hide_on_launch: true,
             close_to_tray: true,
+            discord_signed_in: crate::keychain::get_token().is_some(),
             ..Settings::default()
         });
     }
     let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    serde_json::from_str(&raw).map_err(|e| e.to_string())
+    let mut settings: Settings = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+
+    // One-time migration: older builds stored the Discord token in plain
+    // text right in this file (a `discord_token` string field, since
+    // dropped from the Settings struct — see its doc comment in
+    // types.rs). Lift it into the OS keychain so it stops round-tripping
+    // through settings.json on every save. Skipped if the keychain
+    // already holds a token, so this can never clobber a fresher one.
+    if crate::keychain::get_token().is_none() {
+        if let Ok(legacy) = serde_json::from_str::<serde_json::Value>(&raw) {
+            if let Some(token) = legacy
+                .get("discord_token")
+                .and_then(|v| v.as_str())
+                .filter(|t| !t.is_empty())
+            {
+                if let Err(e) = crate::keychain::set_token(token) {
+                    log::warn!("failed to migrate legacy discord_token into the keychain: {e}");
+                }
+            }
+        }
+    }
+
+    settings.discord_signed_in = crate::keychain::get_token().is_some();
+    Ok(settings)
 }
 
 pub fn save_settings(app: &AppHandle, settings: &Settings) -> Result<(), String> {

@@ -157,7 +157,7 @@ function viewCharacterOnWeb(character: GuildSyncData) {
             </button>
           </div>
         </div>
-        <p v-if="!store.settings.discordToken" class="hint">
+        <p v-if="!store.settings.discordSignedIn" class="hint">
           Sign in with Discord (sidebar) to sync these to the website.
         </p>
         <p v-if="store.guildSyncError" class="hint error">{{ store.guildSyncError }}</p>

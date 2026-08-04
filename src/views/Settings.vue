@@ -206,7 +206,7 @@ async function onWtfAutoPushChange(e: Event) {
 
     <section class="field">
       <label>Discord Account</label>
-      <div v-if="store.settings.discordToken" class="row discord-row">
+      <div v-if="store.settings.discordSignedIn" class="row discord-row">
         <img
           v-if="store.settings.discordAvatar"
           class="avatar"
@@ -223,7 +223,7 @@ async function onWtfAutoPushChange(e: Event) {
       <p class="hint">Links your Discord identity so your WTF folder can sync across devices.</p>
     </section>
 
-    <section v-if="store.settings.discordToken" class="field">
+    <section v-if="store.settings.discordSignedIn" class="field">
       <label>Settings Backup</label>
       <p class="hint">
         Backs up your account/character settings and every addon's saved data (keybinds, macros,

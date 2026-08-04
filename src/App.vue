@@ -224,7 +224,7 @@ onUnmounted(() => {
         <div v-if="store.manifestError" class="manifest-error" :title="store.manifestError">
           Guild server error — check Settings
         </div>
-        <div v-if="store.settings.discordToken" class="discord-status">
+        <div v-if="store.settings.discordSignedIn" class="discord-status">
           <img
             v-if="store.settings.discordAvatar"
             class="discord-avatar"
