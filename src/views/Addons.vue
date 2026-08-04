@@ -106,6 +106,9 @@ async function onDeleteForever(name: string) {
         </button>
       </div>
       <p>Mandatory addons always sync. Uncheck anything else to leave it out — unchecking something already installed moves it to Interface/.DisabledAddons on the next sync (recoverable by re-checking). Use the ✕ to delete something — it moves to Trash below, recoverable until you delete it forever from there.</p>
+      <p v-if="store.installedError" class="installed-warning" :title="store.installedError">
+        Couldn't refresh installed status — showing the last known state.
+      </p>
       <div v-if="store.manifest" class="filters">
         <input v-model="search" type="text" class="search-input" placeholder="Search addons..." />
         <label class="hide-disabled">
@@ -284,6 +287,12 @@ async function onDeleteForever(name: string) {
 
 .empty.error {
   color: var(--danger);
+}
+
+.installed-warning {
+  color: var(--danger);
+  font-size: 12px;
+  margin: 4px 0 0;
 }
 
 .group {

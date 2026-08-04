@@ -378,7 +378,7 @@ fn scan_custom_addons(addon_dir: &Path, claimed_folders: &HashSet<String>) -> Ve
 /// lives in, re-reading each addon's live .toc info, refreshing
 /// type/apiVersion/sha256 against the current manifest, discovering any new
 /// custom addons, and rewriting the file with the result.
-pub fn get_installed_state(game_path: &str, manifest: &Manifest) -> InstalledState {
+pub fn get_installed_state(app: Option<&AppHandle>, game_path: &str, manifest: &Manifest) -> InstalledState {
     let addon_dir = addon_dir_for(game_path);
     let disabled_dir = disabled_dir_for(game_path);
     let deleted_dir = deleted_dir_for(game_path);
@@ -444,7 +444,14 @@ pub fn get_installed_state(game_path: &str, manifest: &Manifest) -> InstalledSta
     }
 
     refreshed.extend(scan_custom_addons(&addon_dir, &claimed_folders));
-    let _ = save_addons_state(&addon_dir, &refreshed);
+    // A failure here means the freshly-computed state below is correct for
+    // THIS call, but never made it to disk - the next read (including a
+    // plain app restart) would fall back to whatever was last saved
+    // successfully, silently undoing this refresh. Worth logging even
+    // though it's not worth failing the whole command over.
+    if let (Err(e), Some(app)) = (save_addons_state(&addon_dir, &refreshed), app) {
+        crate::debug_log::error(app, "get_installed_state", &format!("failed to persist addon state: {e}"));
+    }
 
     let addons_map: HashMap<String, AddonStateEntry> = refreshed.into_iter().map(|e| (e.name.clone(), e)).collect();
 
@@ -790,7 +797,15 @@ pub async fn sync_addons(
     }
 
     let final_list: Vec<AddonStateEntry> = by_name.into_values().collect();
-    let _ = save_addons_state(&addon_dir, &final_list);
+    // A failure here is worse than in get_installed_state: addons above
+    // were actually downloaded/installed/moved successfully (recorded in
+    // `result`), but if this write doesn't land, the next state read falls
+    // back to the pre-sync file - an addon that WAS just updated would
+    // permanently look out of date again (pendingUpdateCount/Sync both
+    // compare against this saved state), forcing a re-sync every time.
+    if let Err(e) = save_addons_state(&addon_dir, &final_list) {
+        crate::debug_log::error(app, "sync_addons", &format!("failed to persist addon state after sync: {e}"));
+    }
 
     result
 }
@@ -1020,7 +1035,7 @@ mod tests {
 
         let manifest = test_manifest();
         let game_path = tmp.to_str().unwrap();
-        let state = get_installed_state(game_path, &manifest);
+        let state = get_installed_state(None, game_path, &manifest);
         let addon_state = state.addons.get("AddonA").unwrap();
         assert_eq!(addon_state.version, "9.9.9", "installed version must be read live from the .toc, not the stale recorded value");
         assert_eq!(addon_state.api_version.as_deref(), Some("1.0"));
