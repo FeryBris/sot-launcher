@@ -29,6 +29,13 @@ pub struct PlayerReport {
     pub role: Role,
     pub damage_done: i64,
     pub healing_done: i64,
+    /// Of healing_done, how much landed on someone OTHER than the caster -
+    /// see PlayerStats::finalize's own doc comment for why role inference
+    /// uses this instead of healing_done itself. Sent to the backend
+    /// alongside healing_done (rather than folded into it) so
+    /// CombatLogImport::mergeCharacters can apply the same exclusion after
+    /// max-merging multiple submissions of the same encounter.
+    pub healing_done_to_others: i64,
     pub damage_taken: i64,
     pub deaths: i32,
     pub active_time_sec: f64,
@@ -68,6 +75,8 @@ struct PlayerStats {
     name: String,
     damage_done: i64,
     healing_done: i64,
+    /// See PlayerReport::healing_done_to_others' own doc comment.
+    healing_done_to_others: i64,
     damage_taken: i64,
     deaths: i32,
     first_action_ms: Option<i64>,
@@ -85,15 +94,40 @@ impl PlayerStats {
         self.last_action_ms = Some(t);
     }
 
-    fn finalize(self, guid: String) -> Option<PlayerReport> {
+    /// `avg_damage_taken` is the WHOLE ROSTER's mean damage_taken for this
+    /// encounter (computed once by CombatSession::finalize before calling
+    /// this per player) — see the role thresholds below for why a single
+    /// player's own stats alone aren't enough to infer tank/healer/dps.
+    fn finalize(self, guid: String, avg_damage_taken: f64) -> Option<PlayerReport> {
         let (first, last) = (self.first_action_ms?, self.last_action_ms?);
         // At least 1 second, matching wowlogs' own `max(1, ...)` — avoids a
         // division blowup for a player whose only action landed in the same
         // millisecond the encounter ended.
         let active_time_sec = ((last - first) as f64 / 1000.0).max(1.0);
-        let role = if self.healing_done as f64 > self.damage_done as f64 * 0.5 {
+        // Two thresholds, confirmed against real logs where two actual
+        // tanks came back "dps" and "healer":
+        //
+        // - Healer uses healing_done_TO_OTHERS, not raw healing_done. A
+        //   self-healing tank (Blood DK's Death Strike/Rune Tap, a Prot
+        //   Paladin's Seal/Judgement procs) can rack up healing_done that
+        //   rivals a real healer's, but it's all self-targeted — excluding
+        //   it is what tells the two apart.
+        // - Tank fires on EITHER of two signals: the original
+        //   `damage_taken > own damage_done * 2` ratio (kept as-is — still
+        //   the only signal available for a solo/duo session, where
+        //   "relative to the roster" is meaningless since the roster IS
+        //   just them), OR damage_taken clearing 1.5x the ENCOUNTER
+        //   ROSTER'S average — needed because a tank who also deals heavy
+        //   threat-generation damage (common for WotLK-geared tanks) can
+        //   easily out-damage what they take, which made the original
+        //   ratio alone nearly unreachable in a real multi-player pull. A
+        //   real tank still stands out clearly against what everyone else
+        //   in the same pull took.
+        let role = if self.healing_done_to_others as f64 > self.damage_done as f64 * 0.5 {
             Role::Healer
-        } else if self.damage_taken as f64 > self.damage_done as f64 * 2.0 {
+        } else if self.damage_taken as f64 > self.damage_done as f64 * 2.0
+            || self.damage_taken as f64 > avg_damage_taken * 1.5
+        {
             Role::Tank
         } else {
             Role::Dps
@@ -105,6 +139,7 @@ impl PlayerStats {
             role,
             damage_done: self.damage_done,
             healing_done: self.healing_done,
+            healing_done_to_others: self.healing_done_to_others,
             damage_taken: self.damage_taken,
             deaths: self.deaths,
             active_time_sec: (active_time_sec * 100.0).round() / 100.0,
@@ -234,6 +269,14 @@ impl CombatSession {
                 {
                     let p = self.players.entry(guid).or_default();
                     p.healing_done += event.amount;
+                    // Compared against the RAW source/dest guids, not the
+                    // credited (pet-resolved) source guid above — this asks
+                    // "did the caster target themselves", which is what it
+                    // means regardless of whether that caster's damage/
+                    // healing ends up credited to a pet owner.
+                    if event.dest_guid != event.source_guid {
+                        p.healing_done_to_others += event.amount;
+                    }
                     p.touch(event.timestamp_ms, &name);
                 }
             }
@@ -267,10 +310,20 @@ impl CombatSession {
     fn finalize(self) -> Option<(EncounterReport, String)> {
         let duration_sec = ((self.last_event_ms - self.start_ms) as f64 / 1000.0).max(0.0);
 
+        if self.players.is_empty() {
+            return None;
+        }
+        // Computed once, across the WHOLE roster, before any individual
+        // player's role is decided — see PlayerStats::finalize's own doc
+        // comment for why tank inference needs this instead of comparing a
+        // player only against their own damage dealt.
+        let total_damage_taken: i64 = self.players.values().map(|p| p.damage_taken).sum();
+        let avg_damage_taken = total_damage_taken as f64 / self.players.len() as f64;
+
         let mut players: Vec<PlayerReport> = self
             .players
             .into_iter()
-            .filter_map(|(guid, stats)| stats.finalize(guid))
+            .filter_map(|(guid, stats)| stats.finalize(guid, avg_damage_taken))
             .collect();
         if players.is_empty() {
             return None;
@@ -462,6 +515,57 @@ mod tests {
         }
     }
 
+    /// The reverse of dmg() above: NPC source, player dest - what a
+    /// player actually TAKING damage looks like on the wire (dmg() is
+    /// always player-source/NPC-dest, so it can't represent this).
+    fn npc_hits_player(
+        t: i64,
+        source_guid: &str,
+        source_name: &str,
+        dest_guid: &str,
+        dest_name: &str,
+        amount: i64,
+    ) -> CombatEvent {
+        CombatEvent {
+            timestamp_ms: t,
+            kind: CombatEventKind::Damage,
+            source_guid: source_guid.to_string(),
+            source_name: source_name.to_string(),
+            source_flags: 0xa48,
+            dest_guid: dest_guid.to_string(),
+            dest_name: dest_name.to_string(),
+            dest_flags: 0x512,
+            ability_id: 1,
+            ability_name: "Test".to_string(),
+            amount,
+            critical: false,
+        }
+    }
+
+    fn heal(
+        t: i64,
+        source_guid: &str,
+        source_name: &str,
+        dest_guid: &str,
+        dest_name: &str,
+        amount: i64,
+    ) -> CombatEvent {
+        CombatEvent {
+            timestamp_ms: t,
+            kind: CombatEventKind::Heal,
+            source_guid: source_guid.to_string(),
+            source_name: source_name.to_string(),
+            source_flags: 0x512,
+            dest_guid: dest_guid.to_string(),
+            dest_name: dest_name.to_string(),
+            dest_flags: 0x512,
+            ability_id: 1,
+            ability_name: "Test Heal".to_string(),
+            amount,
+            critical: false,
+        }
+    }
+
     #[test]
     fn aggregates_damage_and_computes_dps() {
         let mut tracker = SessionTracker::new(5000);
@@ -513,6 +617,11 @@ mod tests {
         pet_dmg.source_flags = 0x1112;
         tracker.record_event(pet_dmg);
 
+        // The closing event only exists to push the tracker past the
+        // timeout (see aggregates_damage_and_computes_dps' own note on this
+        // pattern) - its own amount belongs to the NEW session it starts,
+        // not the one it finalizes, so it's deliberately not part of the
+        // returned report's total below.
         let report = tracker
             .record_event(dmg(10_000, "0x0E1", "Alice", "0xF1", "Boss", 1))
             .expect("gap past the timeout should finalize the session");
@@ -520,7 +629,7 @@ mod tests {
         assert_eq!(report.players.len(), 1, "the pet must not show up as its own player entry");
         let alice = &report.players[0];
         assert_eq!(alice.name, "Alice");
-        assert_eq!(alice.damage_done, 501); // Alice's own 1 + the pet's 500
+        assert_eq!(alice.damage_done, 500); // just the pet's credited damage
     }
 
     #[test]
@@ -532,12 +641,19 @@ mod tests {
         // "Wolf" player entry.
         let mut pet_dmg = dmg(0, "0xF9", "Wolf", "0xF1", "Boss", 500);
         pet_dmg.source_flags = 0x1112;
-        tracker.record_event(pet_dmg);
+        assert!(tracker.record_event(pet_dmg).is_none());
 
-        let report = tracker.record_event(dmg(10_000, "0x0E1", "Alice", "0xF1", "Boss", 1));
-        let players = &report.expect("gap past the timeout should finalize the session").players;
-        assert_eq!(players.len(), 1);
-        assert_eq!(players[0].name, "Alice");
+        // The session that only ever saw the dropped pet damage has no
+        // real player action at all, so it finalizes to nothing (see
+        // CombatSession::finalize's own doc comment) rather than a report
+        // with zero players - Alice's own event below starts a brand new
+        // session, which is what actually gets checked here via check_idle.
+        tracker.record_event(dmg(10_000, "0x0E1", "Alice", "0xF1", "Boss", 1));
+        let (report, _) = tracker
+            .check_idle(std::time::Duration::from_secs(0))
+            .expect("should have a finalized encounter");
+        assert_eq!(report.players.len(), 1);
+        assert_eq!(report.players[0].name, "Alice");
     }
 
     #[test]
@@ -706,5 +822,66 @@ mod tests {
             .expect("should have a finalized encounter");
         assert!(!raw_log.contains("Some Buff"));
         assert!(raw_log.contains(first_damage_line));
+    }
+
+    #[test]
+    fn a_tank_who_mostly_heals_themselves_is_not_misclassified_as_healer() {
+        let mut tracker = SessionTracker::new(5000);
+        // Blood DK-style profile: takes clearly more punishment than the
+        // rest of the roster, and "heals" almost entirely itself (Death
+        // Strike/Rune Tap) - exactly the combination that used to come back
+        // Healer, since the old formula counted every heal cast, self-
+        // targeted or not, toward the healer threshold.
+        tracker.record_event(dmg(0, "0xTANK", "Grondar", "0xBoss", "Boss", 300));
+        tracker.record_event(npc_hits_player(0, "0xBoss", "Boss", "0xTANK", "Grondar", 150));
+        tracker.record_event(heal(0, "0xTANK", "Grondar", "0xTANK", "Grondar", 100));
+        tracker.record_event(dmg(0, "0xDPS1", "Alice", "0xBoss", "Boss", 200));
+        tracker.record_event(npc_hits_player(0, "0xBoss", "Boss", "0xDPS1", "Alice", 10));
+        tracker.record_event(dmg(0, "0xDPS2", "Bob", "0xBoss", "Boss", 180));
+        tracker.record_event(npc_hits_player(0, "0xBoss", "Boss", "0xDPS2", "Bob", 15));
+
+        let (report, _) = tracker
+            .check_idle(std::time::Duration::from_secs(0))
+            .expect("should have a finalized encounter");
+        let tank = report.players.iter().find(|p| p.name == "Grondar").unwrap();
+        assert_eq!(tank.role, Role::Tank);
+    }
+
+    #[test]
+    fn a_real_healer_whose_healing_lands_on_others_is_still_classified_as_healer() {
+        let mut tracker = SessionTracker::new(5000);
+        tracker.record_event(dmg(0, "0xHEALER", "Priestly", "0xBoss", "Boss", 50));
+        tracker.record_event(npc_hits_player(0, "0xBoss", "Boss", "0xHEALER", "Priestly", 5));
+        tracker.record_event(heal(0, "0xHEALER", "Priestly", "0xTANK", "Grondar", 100));
+        tracker.record_event(dmg(0, "0xTANK", "Grondar", "0xBoss", "Boss", 300));
+        tracker.record_event(npc_hits_player(0, "0xBoss", "Boss", "0xTANK", "Grondar", 150));
+
+        let (report, _) = tracker
+            .check_idle(std::time::Duration::from_secs(0))
+            .expect("should have a finalized encounter");
+        let healer = report.players.iter().find(|p| p.name == "Priestly").unwrap();
+        assert_eq!(healer.role, Role::Healer);
+    }
+
+    #[test]
+    fn tank_is_classified_by_damage_taken_relative_to_the_roster_average_not_their_own_damage() {
+        let mut tracker = SessionTracker::new(5000);
+        // The tank deals more than 3x what they take - the old
+        // `damage_taken > damage_done * 2` threshold would have called
+        // this Dps, exactly the failure mode reported against a real log
+        // (a tank whose gear/threat rotation lets them out-damage what
+        // they take).
+        tracker.record_event(dmg(0, "0xTANK", "Grondar", "0xBoss", "Boss", 1000));
+        tracker.record_event(npc_hits_player(0, "0xBoss", "Boss", "0xTANK", "Grondar", 300));
+        tracker.record_event(dmg(0, "0xDPS1", "Alice", "0xBoss", "Boss", 200));
+        tracker.record_event(npc_hits_player(0, "0xBoss", "Boss", "0xDPS1", "Alice", 20));
+        tracker.record_event(dmg(0, "0xDPS2", "Bob", "0xBoss", "Boss", 200));
+        tracker.record_event(npc_hits_player(0, "0xBoss", "Boss", "0xDPS2", "Bob", 25));
+
+        let (report, _) = tracker
+            .check_idle(std::time::Duration::from_secs(0))
+            .expect("should have a finalized encounter");
+        let tank = report.players.iter().find(|p| p.name == "Grondar").unwrap();
+        assert_eq!(tank.role, Role::Tank);
     }
 }

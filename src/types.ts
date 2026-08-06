@@ -419,6 +419,9 @@ export interface CombatPlayerReport {
   role: CombatRole
   damageDone: number
   healingDone: number
+  /** Of healingDone, how much landed on someone other than the caster —
+   *  see combat_log_session.rs's PlayerReport::healing_done_to_others. */
+  healingDoneToOthers: number
   damageTaken: number
   deaths: number
   activeTimeSec: number
