@@ -174,11 +174,15 @@ fn process_lines(
     raw_logs: &RawLogStore,
     lines: Vec<String>,
 ) {
+    // Computed once for the whole batch (a backlog catch-up can be hundreds
+    // of thousands of lines) rather than per line — see
+    // combat_log_parser::today_reference's doc comment.
+    let reference = crate::combat_log_parser::today_reference();
     let mut finished = Vec::new();
     {
         let mut tracker = tracker.lock().unwrap();
         for line in lines {
-            if let Some(result) = tracker.record_line(&line) {
+            if let Some(result) = tracker.record_line(&line, reference) {
                 finished.push(result);
             }
         }

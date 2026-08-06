@@ -2,12 +2,15 @@
 // inference — ported from wowlogs/combat_detector.py, aggregator.py, and
 // roles.py. Unlike the Python original (which aggregates every GUID it
 // sees, NPCs included, into "player" stats), this only tracks real player
-// GUIDs (see combat_log_parser::is_player_guid) and keeps each one's name
+// GUIDs (see combat_log_parser::is_player_flags) and keeps each one's name
 // alongside their stats — the Python version's finalized payload only ever
 // had GUIDs to key by, with no name anywhere in the output.
 
-use crate::combat_log_parser::{is_player_guid, CombatEvent, CombatEventKind};
-use crate::combat_log_zone::{self, ClassifierEvent, ContentType};
+use crate::combat_log_parser::{
+    is_npc_flags, is_pet_or_guardian_flags, is_player_flags, npc_entry_id, CombatEvent, CombatEventKind,
+};
+use crate::combat_log_zone::{self, ContentType};
+use chrono::NaiveDate;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -50,6 +53,13 @@ pub struct EncounterReport {
     /// row (or not matching, for content that doesn't have one) belongs on
     /// the backend, which already owns that reference data.
     pub npc_names: Vec<String>,
+    /// Same NPC names as npc_names, mapped to the creature template
+    /// ("entry") ID embedded in their GUID where extractable (see
+    /// combat_log_parser::npc_entry_id) — a more reliable join key than
+    /// name for the backend to match against a Boss row, since several
+    /// distinct NPCs can share a display name. Not every name necessarily
+    /// has an entry here (e.g. its GUID didn't match the expected layout).
+    pub npc_entry_ids: std::collections::HashMap<String, i64>,
     pub players: Vec<PlayerReport>,
 }
 
@@ -110,13 +120,33 @@ pub struct CombatSession {
     session_id: String,
     start_ms: i64,
     last_event_ms: i64,
-    events: Vec<CombatEvent>,
+    /// Total events recorded (parsed damage/heal/death lines only — see
+    /// record_line's own doc comment for why unparsed lines don't count),
+    /// tracked as a running count rather than keeping every CombatEvent
+    /// around just to re-derive this at finalize() time.
+    event_count: usize,
+    /// Of event_count, how many were player damage landing on an NPC —
+    /// combat_log_zone::classify's own "sustained, structured combat"
+    /// signal. Same reasoning as event_count: tracked live instead of
+    /// replaying a buffered event list.
+    npc_hit_count: usize,
     players: std::collections::HashMap<String, PlayerStats>,
     /// Total player damage dealt to each distinct NPC name seen — keyed by
     /// name, not GUID, since several individual mobs (adds, trash packs)
     /// commonly share one name and that's the granularity a backend Boss
     /// row would match against anyway.
     npc_damage: std::collections::HashMap<String, i64>,
+    /// First-seen creature entry ID per NPC name (see
+    /// combat_log_parser::npc_entry_id) — a supplementary, more reliable
+    /// join key alongside npc_damage's name keys.
+    npc_entry_ids: std::collections::HashMap<String, i64>,
+    /// Pet/totem/guardian GUID -> (owner guid, owner name), learned from
+    /// SPELL_SUMMON lines as this session sees them — see
+    /// CombatEventKind::Summon and credited_source's own doc comments for
+    /// why this exists at all (a pet's own flags are neither
+    /// is_player_flags nor is_npc_flags, so without this its damage/
+    /// healing wouldn't count toward anyone).
+    pet_owners: std::collections::HashMap<String, (String, String)>,
     /// Every raw log line seen while this session was open, unparsed lines
     /// (aura applied/removed, casts, misses, ...) included — this is the
     /// "everything that happened" record a WCL-style backend breakdown
@@ -135,53 +165,94 @@ impl CombatSession {
             session_id,
             start_ms,
             last_event_ms: start_ms,
-            events: Vec::new(),
+            event_count: 0,
+            npc_hit_count: 0,
             players: std::collections::HashMap::new(),
             npc_damage: std::collections::HashMap::new(),
+            npc_entry_ids: std::collections::HashMap::new(),
+            pet_owners: std::collections::HashMap::new(),
             raw_lines: Vec::new(),
         }
+    }
+
+    /// Who a damage/heal event's SOURCE should be credited to, or None if
+    /// it shouldn't count toward any player at all (an NPC's own action,
+    /// or a pet/guardian whose owner this session never learned about from
+    /// a SPELL_SUMMON line - graceful degradation, not a fake "pet as
+    /// player" entry). A pet/guardian with a KNOWN owner resolves to the
+    /// OWNER's guid/name instead of the pet's own, so e.g. a hunter pet's
+    /// damage credits the hunter rather than silently not counting toward
+    /// anyone (a pet's own flags are neither is_player_flags nor
+    /// is_npc_flags).
+    fn credited_source(&self, guid: &str, name: &str, flags: i64) -> Option<(String, String)> {
+        if is_player_flags(flags) {
+            return Some((guid.to_string(), name.to_string()));
+        }
+        if is_pet_or_guardian_flags(flags) {
+            return self.pet_owners.get(guid).cloned();
+        }
+        None
     }
 
     fn record(&mut self, event: CombatEvent, raw_line: &str) {
         self.raw_lines.push(raw_line.to_string());
         self.last_event_ms = event.timestamp_ms;
+        self.event_count += 1;
 
         match event.kind {
             CombatEventKind::Damage => {
-                if is_player_guid(&event.source_guid) {
-                    let p = self.players.entry(event.source_guid.clone()).or_default();
+                if let Some((guid, name)) =
+                    self.credited_source(&event.source_guid, &event.source_name, event.source_flags)
+                {
+                    let p = self.players.entry(guid).or_default();
                     p.damage_done += event.amount;
-                    p.touch(event.timestamp_ms, &event.source_name);
+                    p.touch(event.timestamp_ms, &name);
                 }
-                if is_player_guid(&event.dest_guid) {
+                if is_player_flags(event.dest_flags) {
                     let p = self.players.entry(event.dest_guid.clone()).or_default();
                     p.damage_taken += event.amount;
                     if p.name.is_empty() {
                         p.name = event.dest_name.clone();
                     }
-                } else if crate::combat_log_parser::is_npc_guid(&event.dest_guid)
-                    && !event.dest_name.is_empty()
-                {
+                } else if is_npc_flags(event.dest_flags) && !event.dest_name.is_empty() {
+                    // Not gated to player-sourced hits only - matches
+                    // combat_log_zone::classify's original semantics
+                    // (any damage-to-NPC event counts toward its "sustained,
+                    // structured combat" signal, NPC-vs-NPC included), now
+                    // tracked incrementally instead of replayed from a
+                    // buffered event list at finalize() time.
+                    self.npc_hit_count += 1;
                     *self.npc_damage.entry(event.dest_name.clone()).or_insert(0) += event.amount;
+                    if let Some(entry_id) = npc_entry_id(&event.dest_guid) {
+                        self.npc_entry_ids.entry(event.dest_name.clone()).or_insert(entry_id);
+                    }
                 }
             }
             CombatEventKind::Heal => {
-                if is_player_guid(&event.source_guid) {
-                    let p = self.players.entry(event.source_guid.clone()).or_default();
+                if let Some((guid, name)) =
+                    self.credited_source(&event.source_guid, &event.source_name, event.source_flags)
+                {
+                    let p = self.players.entry(guid).or_default();
                     p.healing_done += event.amount;
-                    p.touch(event.timestamp_ms, &event.source_name);
+                    p.touch(event.timestamp_ms, &name);
                 }
             }
             CombatEventKind::Death => {
-                if is_player_guid(&event.dest_guid) {
+                if is_player_flags(event.dest_flags) {
                     if let Some(p) = self.players.get_mut(&event.dest_guid) {
                         p.deaths += 1;
                     }
                 }
             }
+            CombatEventKind::Summon => {
+                if is_pet_or_guardian_flags(event.dest_flags) {
+                    self.pet_owners.insert(
+                        event.dest_guid.clone(),
+                        (event.source_guid.clone(), event.source_name.clone()),
+                    );
+                }
+            }
         }
-
-        self.events.push(event);
     }
 
     fn is_timed_out(&self, now_ms: i64, timeout_ms: i64) -> bool {
@@ -194,7 +265,6 @@ impl CombatSession {
     /// saw NPCs fighting each other, or nothing but aura events before
     /// this got filtered out upstream).
     fn finalize(self) -> Option<(EncounterReport, String)> {
-        let event_count = self.events.len();
         let duration_sec = ((self.last_event_ms - self.start_ms) as f64 / 1000.0).max(0.0);
 
         let mut players: Vec<PlayerReport> = self
@@ -207,15 +277,7 @@ impl CombatSession {
         }
         players.sort_by_key(|p| std::cmp::Reverse(p.damage_done));
 
-        let classifier_events: Vec<ClassifierEvent> = self
-            .events
-            .iter()
-            .map(|e| ClassifierEvent {
-                kind: e.kind,
-                dest_guid: &e.dest_guid,
-            })
-            .collect();
-        let analysis = combat_log_zone::classify(&classifier_events, &players);
+        let analysis = combat_log_zone::classify(self.npc_hit_count, self.event_count, &players);
 
         let mut npc_names: Vec<(String, i64)> = self.npc_damage.into_iter().collect();
         npc_names.sort_by_key(|(_, damage)| std::cmp::Reverse(*damage));
@@ -227,8 +289,9 @@ impl CombatSession {
             duration_sec: (duration_sec * 100.0).round() / 100.0,
             content_type: analysis.content_type,
             content_quality_score: (analysis.quality_score * 100.0).round() / 100.0,
-            event_count,
+            event_count: self.event_count,
             npc_names: npc_names.into_iter().map(|(name, _)| name).collect(),
+            npc_entry_ids: self.npc_entry_ids,
             players,
         };
         Some((report, self.raw_lines.join("\n")))
@@ -298,8 +361,13 @@ impl SessionTracker {
     /// log — accepted as a minor gap (a pull's opening buff/cast lines,
     /// typically a couple of seconds at most) rather than adding a
     /// pre-buffering scheme for it.
-    pub fn record_line(&mut self, line: &str) -> Option<(EncounterReport, String)> {
-        let Some(event) = crate::combat_log_parser::parse_line(line) else {
+    ///
+    /// `reference` is "today" for resolving the line's year-less timestamp
+    /// — the caller computes this once per batch of lines rather than this
+    /// (or parse_line) recomputing it per line; see
+    /// combat_log_parser::today_reference's doc comment.
+    pub fn record_line(&mut self, line: &str, reference: NaiveDate) -> Option<(EncounterReport, String)> {
+        let Some(event) = crate::combat_log_parser::parse_line(line, reference) else {
             if let Some(session) = self.current.as_mut() {
                 session.raw_lines.push(line.to_string());
             }
@@ -363,7 +431,7 @@ impl SessionTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::combat_log_parser::parse_line;
+    use crate::combat_log_parser::{parse_line, today_reference};
 
     fn dmg(
         t: i64,
@@ -373,13 +441,20 @@ mod tests {
         dest_name: &str,
         amount: i64,
     ) -> CombatEvent {
+        // 0x512 / 0xa48 are real flag values lifted from
+        // combat_log_parser's own fixtures — player and NPC respectively
+        // (see that module's flags_classification test) — every test
+        // below relies on source=player, dest=NPC classification via
+        // these, same as production parsing does.
         CombatEvent {
             timestamp_ms: t,
             kind: CombatEventKind::Damage,
             source_guid: source_guid.to_string(),
             source_name: source_name.to_string(),
+            source_flags: 0x512,
             dest_guid: dest_guid.to_string(),
             dest_name: dest_name.to_string(),
+            dest_flags: 0xa48,
             ability_id: 1,
             ability_name: "Test".to_string(),
             amount,
@@ -411,10 +486,81 @@ mod tests {
     }
 
     #[test]
+    fn pet_damage_is_credited_to_its_owner_once_a_summon_line_reveals_it() {
+        let mut tracker = SessionTracker::new(5000);
+        // 0x1112 is the real totem/pet dest-flags value confirmed against
+        // this guild's own WoWCombatLog.txt (see combat_log_parser's
+        // parses_spell_summon_with_owner_as_source_and_pet_as_dest test).
+        let summon = CombatEvent {
+            timestamp_ms: 0,
+            kind: CombatEventKind::Summon,
+            source_guid: "0x0E1".to_string(),
+            source_name: "Alice".to_string(),
+            source_flags: 0x512,
+            dest_guid: "0xF9".to_string(),
+            dest_name: "Wolf".to_string(),
+            dest_flags: 0x1112,
+            ability_id: 0,
+            ability_name: String::new(),
+            amount: 0,
+            critical: false,
+        };
+        assert!(tracker.record_event(summon).is_none());
+
+        // The pet itself is the SOURCE here, not Alice - without owner
+        // resolution this damage wouldn't count toward anyone at all.
+        let mut pet_dmg = dmg(1000, "0xF9", "Wolf", "0xF1", "Boss", 500);
+        pet_dmg.source_flags = 0x1112;
+        tracker.record_event(pet_dmg);
+
+        let report = tracker
+            .record_event(dmg(10_000, "0x0E1", "Alice", "0xF1", "Boss", 1))
+            .expect("gap past the timeout should finalize the session");
+
+        assert_eq!(report.players.len(), 1, "the pet must not show up as its own player entry");
+        let alice = &report.players[0];
+        assert_eq!(alice.name, "Alice");
+        assert_eq!(alice.damage_done, 501); // Alice's own 1 + the pet's 500
+    }
+
+    #[test]
+    fn pet_damage_with_no_known_owner_is_dropped_not_faked_as_a_player() {
+        let mut tracker = SessionTracker::new(5000);
+        // No SPELL_SUMMON was ever seen for "0xF9" this session (e.g. the
+        // pet was already out before the log started watching) - its
+        // damage should be silently dropped, not attributed to a fake
+        // "Wolf" player entry.
+        let mut pet_dmg = dmg(0, "0xF9", "Wolf", "0xF1", "Boss", 500);
+        pet_dmg.source_flags = 0x1112;
+        tracker.record_event(pet_dmg);
+
+        let report = tracker.record_event(dmg(10_000, "0x0E1", "Alice", "0xF1", "Boss", 1));
+        let players = &report.expect("gap past the timeout should finalize the session").players;
+        assert_eq!(players.len(), 1);
+        assert_eq!(players[0].name, "Alice");
+    }
+
+    #[test]
     fn npc_vs_npc_damage_is_not_tracked_as_a_player() {
         let mut tracker = SessionTracker::new(5000);
-        tracker.record_event(dmg(0, "0xF1", "Boss", "0xF2", "Add", 500));
-        let report = tracker.record_event(dmg(10_000, "0xF1", "Boss", "0xF2", "Add", 500));
+        let npc_vs_npc = CombatEvent {
+            timestamp_ms: 0,
+            kind: CombatEventKind::Damage,
+            source_guid: "0xF1".to_string(),
+            source_name: "Boss".to_string(),
+            source_flags: 0xa48,
+            dest_guid: "0xF2".to_string(),
+            dest_name: "Add".to_string(),
+            dest_flags: 0xa48,
+            ability_id: 1,
+            ability_name: "Test".to_string(),
+            amount: 500,
+            critical: false,
+        };
+        tracker.record_event(npc_vs_npc.clone());
+        let mut later = npc_vs_npc;
+        later.timestamp_ms = 10_000;
+        let report = tracker.record_event(later);
         // No player ever did anything - nothing to report, even once the
         // session closes out.
         assert!(report.is_none());
@@ -456,9 +602,10 @@ mod tests {
         ];
 
         let mut tracker = SessionTracker::new(5000);
+        let reference = today_reference();
         let mut finished = None;
         for line in lines {
-            let event = parse_line(line).expect("fixture lines must parse");
+            let event = parse_line(line, reference).expect("fixture lines must parse");
             if let Some(report) = tracker.record_event(event) {
                 finished = Some(report);
             }
@@ -489,6 +636,7 @@ mod tests {
         assert_eq!(mamkedy.healing_done, 1036);
         assert_eq!(mamkedy.damage_done, 0);
         assert_eq!(report.npc_names, vec!["Horde Ranger".to_string()]);
+        assert_eq!(report.npc_entry_ids.get("Horde Ranger"), Some(&0x0068B1));
     }
 
     #[test]
@@ -522,8 +670,9 @@ mod tests {
         ];
 
         let mut tracker = SessionTracker::new(5000);
+        let reference = today_reference();
         for line in lines {
-            assert!(tracker.record_line(line).is_none());
+            assert!(tracker.record_line(line, reference).is_none());
         }
         let (_report, raw_log) = tracker
             .check_idle(std::time::Duration::from_secs(0))
@@ -548,8 +697,9 @@ mod tests {
             r#"2/28 14:36:59.336  SWING_DAMAGE,0x0E000000001B5352,"Pzkpfwagen",0x512,0xF1300068B1000064,"Horde Ranger",0xa48,342,0,1,0,0,0,nil,nil,nil"#;
 
         let mut tracker = SessionTracker::new(5000);
-        assert!(tracker.record_line(unrecognized_before_session).is_none());
-        assert!(tracker.record_line(first_damage_line).is_none());
+        let reference = today_reference();
+        assert!(tracker.record_line(unrecognized_before_session, reference).is_none());
+        assert!(tracker.record_line(first_damage_line, reference).is_none());
 
         let (_report, raw_log) = tracker
             .check_idle(std::time::Duration::from_secs(0))

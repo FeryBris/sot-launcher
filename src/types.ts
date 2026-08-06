@@ -440,6 +440,11 @@ export interface CombatEncounterReport {
   contentQualityScore: number
   eventCount: number
   npcNames: string[]
+  /** Same names as npcNames, mapped to the creature template ("entry") ID
+   *  embedded in their GUID where extractable — a more reliable join key
+   *  than name for matching a Boss row server-side, since several distinct
+   *  NPCs can share a display name. Not every name is necessarily present. */
+  npcEntryIds: Record<string, number>
   players: CombatPlayerReport[]
 }
 

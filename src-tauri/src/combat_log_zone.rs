@@ -5,7 +5,6 @@
 // only signals available — this is an approximation, same as the Python
 // original, not a reliable instance/boss identification.
 
-use crate::combat_log_parser::{is_npc_guid, CombatEventKind};
 use crate::combat_log_session::{PlayerReport, Role};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -17,14 +16,6 @@ pub enum ContentType {
     World,
 }
 
-/// A minimal view of one recorded event — only what the classifier needs,
-/// so it doesn't have to depend on the full CombatEvent/session module
-/// beyond this.
-pub struct ClassifierEvent<'a> {
-    pub kind: CombatEventKind,
-    pub dest_guid: &'a str,
-}
-
 pub struct ContentAnalysis {
     pub content_type: ContentType,
     pub quality_score: f64,
@@ -33,9 +24,13 @@ pub struct ContentAnalysis {
 /// Scores a completed encounter's events + finalized player stats against
 /// the same heuristics wowlogs uses: NPC hit volume, group size buckets
 /// (5 = dungeon, 10/25/40 = raid), and event count as a rough proxy for
-/// "sustained, structured combat" vs. a stray swing or two.
-pub fn classify(events: &[ClassifierEvent], players: &[PlayerReport]) -> ContentAnalysis {
-    if events.is_empty() || players.is_empty() {
+/// "sustained, structured combat" vs. a stray swing or two. `npc_hit_count`/
+/// `event_count` are running totals CombatSession tracks live (see its own
+/// doc comment) rather than a full event list replayed here — this used to
+/// take `events: &[ClassifierEvent]` and re-derive both by iterating it on
+/// every finalize() call.
+pub fn classify(npc_hit_count: usize, event_count: usize, players: &[PlayerReport]) -> ContentAnalysis {
+    if event_count == 0 || players.is_empty() {
         return ContentAnalysis {
             content_type: ContentType::Unknown,
             quality_score: 0.0,
@@ -44,11 +39,7 @@ pub fn classify(events: &[ClassifierEvent], players: &[PlayerReport]) -> Content
 
     let mut score = 0.0;
 
-    let npc_hits = events
-        .iter()
-        .filter(|e| e.kind == CombatEventKind::Damage && is_npc_guid(e.dest_guid))
-        .count();
-    if npc_hits > 5 {
+    if npc_hit_count > 5 {
         score += 0.3;
     }
 
@@ -69,7 +60,6 @@ pub fn classify(events: &[ClassifierEvent], players: &[PlayerReport]) -> Content
         score += 0.2;
     }
 
-    let event_count = events.len();
     if event_count > 100 {
         score += 0.1;
     } else if event_count < 20 {
