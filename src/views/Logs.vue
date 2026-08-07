@@ -2,11 +2,10 @@
 import { computed, onMounted, ref } from 'vue'
 import * as api from '../api'
 import { formatDateTime } from '../format'
-import { saveCombatLogAutoSync, store } from '../store'
-import type { SyncableEncounter } from '../types'
+import type { SyncableCombatLogSession } from '../types'
 
-interface EncounterRow {
-  encounter: SyncableEncounter
+interface SessionRow {
+  session: SyncableCombatLogSession
   syncing: boolean
   syncError: string
   synced: boolean
@@ -14,20 +13,20 @@ interface EncounterRow {
   ignored: boolean
 }
 
-const rows = ref<EncounterRow[]>([])
+const rows = ref<SessionRow[]>([])
 const loading = ref(true)
 const loadError = ref('')
 const reprocessing = ref(false)
 const reprocessError = ref('')
 
-function toRow(encounter: SyncableEncounter): EncounterRow {
+function toRow(session: SyncableCombatLogSession): SessionRow {
   return {
-    encounter,
+    session,
     syncing: false,
     syncError: '',
-    synced: encounter.alreadySynced,
+    synced: session.alreadySynced,
     ignoring: false,
-    ignored: encounter.isIgnored,
+    ignored: session.isIgnored,
   }
 }
 
@@ -35,9 +34,9 @@ async function load() {
   loading.value = true
   loadError.value = ''
   try {
-    const encounters = await api.getCapturedCombatSessions()
+    const sessions = await api.getCapturedCombatSessions()
     // Newest first - matches Raids' convention of most-recent-activity-first.
-    rows.value = encounters.map(toRow).sort((a, b) => b.encounter.endTimeMs - a.encounter.endTimeMs)
+    rows.value = sessions.map(toRow).sort((a, b) => b.session.endTimeMs - a.session.endTimeMs)
   } catch (e) {
     loadError.value = String(e)
   } finally {
@@ -50,10 +49,10 @@ onMounted(async () => {
   // Fire-and-forget, same convention as App.vue's own listeners - this
   // view stays mounted (v-show, not v-if) for the app's whole lifetime,
   // so there's no unmount to unlisten on.
-  await api.onCombatEncounterCompleted((encounter) => {
-    // A freshly captured encounter is never already-synced/ignored - the
+  await api.onCombatLogSessionCompleted((session) => {
+    // A freshly captured session is never already-synced/ignored - the
     // watcher only just finalized it, so there's been no chance to do either.
-    rows.value.unshift(toRow({ ...encounter, alreadySynced: false, isIgnored: false }))
+    rows.value.unshift(toRow({ ...session, alreadySynced: false, isIgnored: false }))
   })
 })
 
@@ -88,39 +87,19 @@ function formatDuration(sec: number): string {
   return m > 0 ? `${m}m ${s}s` : `${s}s`
 }
 
-/** endTimeMs is real epoch milliseconds - the log itself has no year, so
- *  the Rust side guesses it from today's date (see combat_log_parser.rs's
- *  guess_year), accurate as long as this log isn't over a year old. */
+/** startTimeMs/endTimeMs are real epoch milliseconds - the log itself has
+ *  no year, so the Rust side guesses it from today's date (see
+ *  combat_log_parser.rs's guess_year), accurate as long as this log isn't
+ *  over a year old. */
 function formatWhen(ms: number): string {
   return formatDateTime(new Date(ms))
 }
 
-function formatNumber(n: number): string {
-  return Math.round(n).toLocaleString()
-}
-
-/** Best-effort label - the first (most-damaged) NPC name plus a count of
- *  any others involved (adds, trash before the boss). No attempt to guess
- *  which one is "the boss" beyond that - see CombatEncounterReport's doc
- *  comment for why that's left to the backend. */
-function encounterTitle(encounter: SyncableEncounter): string {
-  if (encounter.npcNames.length === 0) return 'Unknown encounter'
-  const [primary, ...rest] = encounter.npcNames
-  return rest.length > 0 ? `${primary} (+${rest.length} more)` : primary
-}
-
-function topPlayers(encounter: SyncableEncounter, count = 3): string {
-  return encounter.players
-    .slice(0, count)
-    .map((p) => `${p.name} (${formatNumber(p.dps)} dps)`)
-    .join(', ')
-}
-
-async function syncRow(row: EncounterRow) {
+async function syncRow(row: SessionRow) {
   row.syncing = true
   row.syncError = ''
   try {
-    await api.syncCombatSessionToWeb(row.encounter.sessionId)
+    await api.syncCombatSessionToWeb(row.session.sessionId)
     row.synced = true
   } catch (e) {
     row.syncError = String(e)
@@ -129,20 +108,16 @@ async function syncRow(row: EncounterRow) {
   }
 }
 
-async function toggleIgnore(row: EncounterRow) {
+async function toggleIgnore(row: SessionRow) {
   row.ignoring = true
   try {
-    await api.setCombatSessionIgnored(row.encounter.sessionId, !row.ignored)
+    await api.setCombatSessionIgnored(row.session.sessionId, !row.ignored)
     row.ignored = !row.ignored
   } catch (e) {
     row.syncError = String(e)
   } finally {
     row.ignoring = false
   }
-}
-
-function onAutoSyncToggle(e: Event) {
-  void saveCombatLogAutoSync((e.target as HTMLInputElement).checked)
 }
 </script>
 
@@ -167,21 +142,12 @@ function onAutoSyncToggle(e: Event) {
     <p class="hint">
       Captured automatically from WoWCombatLog.txt while you play — requires combat logging
       enabled in-game (<code>/combatlog</code>, or Interface Options &gt; Advanced Combat Logging).
-      Every pull of at least a few seconds shows up here, including solo/world content — the
-      "type" shown per session is just a best-effort guess, not a filter, so ignore whatever isn't
-      worth keeping. Boss/instance identity isn't resolved yet — that happens once a session is
-      synced to the website.
+      Every ~30 minutes of activity becomes one session here, cut at a quiet moment rather than a
+      hard time limit so a pull is never split across two sessions. Nothing is analyzed
+      client-side any more — boss/pull identity, players, and stats are all resolved once a
+      session is synced to the website. Sync is manual, same as Raids.
     </p>
     <p v-if="reprocessError" class="empty error">{{ reprocessError }}</p>
-
-    <label class="auto-sync-toggle">
-      <input
-        type="checkbox"
-        :checked="store.settings.combatLogAutoSync"
-        @change="onAutoSyncToggle"
-      />
-      Automatically sync new sessions
-    </label>
 
     <p v-if="loadError" class="empty error">{{ loadError }}</p>
     <p v-else-if="!loading && !hasRows" class="empty">
@@ -193,22 +159,17 @@ function onAutoSyncToggle(e: Event) {
       <div class="log-list">
         <div
           v-for="row in activeRows"
-          :key="row.encounter.sessionId"
+          :key="row.session.sessionId"
           class="log-card"
           :class="{ synced: row.synced }"
         >
           <div class="log-main">
             <div class="log-title">
-              <span class="npc-name">{{ encounterTitle(row.encounter) }}</span>
-              <span class="content-type">{{ row.encounter.contentType }}</span>
+              <span class="npc-name">{{ formatWhen(row.session.startTimeMs) }}</span>
             </div>
-            <div class="log-meta">{{ formatWhen(row.encounter.endTimeMs) }}</div>
             <div class="log-meta">
-              {{ formatDuration(row.encounter.durationSec) }} · {{ row.encounter.players.length }}
-              players
-            </div>
-            <div v-if="row.encounter.players.length" class="log-meta">
-              {{ topPlayers(row.encounter) }}
+              {{ formatDuration((row.session.endTimeMs - row.session.startTimeMs) / 1000) }} ·
+              {{ row.session.lineCount.toLocaleString() }} lines
             </div>
             <p v-if="row.syncError" class="log-error">{{ row.syncError }}</p>
           </div>
@@ -230,18 +191,16 @@ function onAutoSyncToggle(e: Event) {
         <div class="log-list">
           <div
             v-for="row in ignoredRows"
-            :key="row.encounter.sessionId"
+            :key="row.session.sessionId"
             class="log-card ignored"
           >
             <div class="log-main">
               <div class="log-title">
-                <span class="npc-name">{{ encounterTitle(row.encounter) }}</span>
-                <span class="content-type">{{ row.encounter.contentType }}</span>
+                <span class="npc-name">{{ formatWhen(row.session.startTimeMs) }}</span>
               </div>
-              <div class="log-meta">{{ formatWhen(row.encounter.endTimeMs) }}</div>
               <div class="log-meta">
-                {{ formatDuration(row.encounter.durationSec) }} · {{ row.encounter.players.length }}
-                players
+                {{ formatDuration((row.session.endTimeMs - row.session.startTimeMs) / 1000) }} ·
+                {{ row.session.lineCount.toLocaleString() }} lines
               </div>
             </div>
 
@@ -300,22 +259,6 @@ h1 {
   color: var(--text-dim);
 }
 
-.auto-sync-toggle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--text-dim);
-  margin-bottom: 16px;
-  cursor: pointer;
-}
-
-.auto-sync-toggle input {
-  width: 13px;
-  height: 13px;
-  accent-color: var(--accent);
-}
-
 .empty {
   margin: 20px 0;
   font-size: 13px;
@@ -371,13 +314,6 @@ h1 {
   font-size: 14px;
   font-weight: 700;
   color: var(--text);
-}
-
-.content-type {
-  font-size: 11px;
-  color: var(--accent-strong);
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
 }
 
 .log-meta {

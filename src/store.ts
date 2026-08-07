@@ -96,7 +96,6 @@ export const store = reactive<Store>({
     wtfSyncAutoPush: false,
     wtfAccountSync: {},
     verboseLogging: false,
-    combatLogAutoSync: false,
   },
   apiBaseUrl: '',
   manifest: null,
@@ -467,10 +466,6 @@ export async function saveWtfSyncAutoPull(enabled: boolean) {
 
 export async function saveWtfSyncAutoPush(enabled: boolean) {
   store.settings = await api.setWtfSyncAutoPush(enabled)
-}
-
-export async function saveCombatLogAutoSync(enabled: boolean) {
-  store.settings = await api.setCombatLogAutoSync(enabled)
 }
 
 /** Per-account opt-out from the Settings Backup dialog's checkbox - only

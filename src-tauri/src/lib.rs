@@ -1,7 +1,6 @@
+mod combat_log_chunker;
 mod combat_log_parser;
-mod combat_log_session;
 mod combat_log_watcher;
-mod combat_log_zone;
 mod commands;
 mod config;
 mod debug_log;
@@ -238,7 +237,6 @@ pub fn run() {
       commands::get_captured_combat_sessions,
       commands::set_combat_session_ignored,
       commands::sync_combat_session_to_web,
-      commands::set_combat_log_auto_sync,
       commands::reprocess_combat_log,
       commands::get_guild_roster,
       commands::sync_guild_roster_to_web,

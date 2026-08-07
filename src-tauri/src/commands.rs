@@ -32,18 +32,18 @@ pub struct AppState {
     pub combat_log_watcher: std::sync::Mutex<Option<notify::RecommendedWatcher>>,
     /// Shared with the combat-log watcher's background thread (via Arc, not
     /// just Mutex like guild_watcher) since both that thread and this
-    /// state's owner need live access to the same in-progress encounter,
-    /// not just to swap the whole thing out.
+    /// state's owner need live access to the same in-progress chunk, not
+    /// just to swap the whole thing out.
     pub combat_log_tracker:
-        std::sync::Arc<std::sync::Mutex<crate::combat_log_session::SessionTracker>>,
-    /// Recently completed encounters, for get_captured_combat_sessions to
-    /// hand the frontend whatever it missed by not having been mounted yet
-    /// when combat-encounter-completed fired.
+        std::sync::Arc<std::sync::Mutex<crate::combat_log_chunker::ChunkTracker>>,
+    /// Recently completed session chunks, for get_captured_combat_sessions
+    /// to hand the frontend whatever it missed by not having been mounted
+    /// yet when combat-log-session-completed fired.
     pub combat_log_recent:
-        std::sync::Arc<std::sync::Mutex<Vec<crate::combat_log_session::EncounterReport>>>,
-    /// (session_id, raw log text) for the same recently completed encounters
-    /// as combat_log_recent above, kept separate so the frontend never has
-    /// to receive this (potentially multi-megabyte) text just to show a
+        std::sync::Arc<std::sync::Mutex<Vec<crate::combat_log_chunker::FinishedChunk>>>,
+    /// (session_id, raw log text) for the same recently completed chunks as
+    /// combat_log_recent above, kept separate so the frontend never has to
+    /// receive this (potentially multi-megabyte) text just to show a
     /// summary row - see combat_log_watcher::RawLogStore's own doc comment.
     pub combat_log_raw_logs: crate::combat_log_watcher::RawLogStore,
     /// Bumped by every watch_combat_log call - lets a still-polling "wait
@@ -72,9 +72,7 @@ impl Default for AppState {
             game_close_watching: std::sync::atomic::AtomicBool::new(false),
             combat_log_watcher: std::sync::Mutex::new(None),
             combat_log_tracker: std::sync::Arc::new(std::sync::Mutex::new(
-                crate::combat_log_session::SessionTracker::new(
-                    crate::combat_log_watcher::ENCOUNTER_TIMEOUT_MS,
-                ),
+                crate::combat_log_chunker::ChunkTracker::new(),
             )),
             combat_log_recent: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             combat_log_raw_logs: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
@@ -85,9 +83,9 @@ impl Default for AppState {
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SyncableEncounter {
+pub struct SyncableCombatLogSession {
     #[serde(flatten)]
-    pub encounter: crate::combat_log_session::EncounterReport,
+    pub chunk: crate::combat_log_chunker::FinishedChunk,
     /// True if a successful "combat_session" sync_log entry already exists
     /// for this session_id — same convention as SyncableRaid::already_synced.
     pub already_synced: bool,
@@ -96,17 +94,17 @@ pub struct SyncableEncounter {
     pub is_ignored: bool,
 }
 
-/// Whatever completed encounters the combat-log watcher has captured since
-/// the launcher started (or since the watched game folder last changed),
-/// each annotated with sync/ignore status — covers the frontend having
-/// missed the combat-encounter-completed event (e.g. it wasn't mounted yet)
-/// same as get_captured_raids does for raids.
+/// Whatever completed session chunks the combat-log watcher has captured
+/// since the launcher started (or since the watched game folder last
+/// changed), each annotated with sync/ignore status — covers the frontend
+/// having missed the combat-log-session-completed event (e.g. it wasn't
+/// mounted yet), same as get_captured_raids does for raids.
 #[tauri::command]
 pub fn get_captured_combat_sessions(
     app: AppHandle,
     state: State<'_, AppState>,
-) -> Result<Vec<SyncableEncounter>, String> {
-    let encounters = state.combat_log_recent.lock().unwrap().clone();
+) -> Result<Vec<SyncableCombatLogSession>, String> {
+    let chunks = state.combat_log_recent.lock().unwrap().clone();
     let log = crate::sync_log::load_sync_log(&app).unwrap_or_default();
     let ignored_ids =
         crate::ignored_combat_sessions::load_ignored_sessions(&app).unwrap_or_default();
@@ -117,12 +115,12 @@ pub fn get_captured_combat_sessions(
         .filter_map(|e| e.session_id.clone())
         .collect();
 
-    Ok(encounters
+    Ok(chunks
         .into_iter()
-        .map(|encounter| SyncableEncounter {
-            already_synced: synced_ids.contains(&encounter.session_id),
-            is_ignored: ignored_ids.contains(&encounter.session_id),
-            encounter,
+        .map(|chunk| SyncableCombatLogSession {
+            already_synced: synced_ids.contains(&chunk.session_id),
+            is_ignored: ignored_ids.contains(&chunk.session_id),
+            chunk,
         })
         .collect())
 }
@@ -147,41 +145,39 @@ pub fn set_combat_session_ignored(
     result
 }
 
-/// Pushes one captured combat session (see get_captured_combat_sessions) to
-/// the website. Just looks the report up and hands off to
-/// sync_encounter_to_web, which is also what combat_log_watcher's auto-sync
-/// path calls directly (no session_id lookup needed there — it already has
-/// the freshly completed report in hand).
+/// Pushes one captured session chunk (see get_captured_combat_sessions) to
+/// the website - unlike the old per-encounter design, there's no separate
+/// auto-sync path calling into this anymore (sync is manual only, matching
+/// Raids - see Settings' own doc comment history for why that toggle was
+/// removed).
 #[tauri::command]
 pub async fn sync_combat_session_to_web(
     app: AppHandle,
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<(), String> {
-    let encounter = state
+    let chunk = state
         .combat_log_recent
         .lock()
         .unwrap()
         .iter()
-        .find(|e| e.session_id == session_id)
+        .find(|c| c.session_id == session_id)
         .cloned()
         .ok_or_else(|| {
-            "session not found — it may have aged out of the recent-encounters buffer".to_string()
+            "session not found — it may have aged out of the recent-sessions buffer".to_string()
         })?;
 
-    sync_encounter_to_web(&app, &state.http, &encounter).await
+    sync_chunk_to_web(&app, &state.http, &chunk).await
 }
 
-/// Posts one encounter to the website and records the outcome in the sync
-/// log (so already_synced/error reporting is identical regardless of
-/// whether this was triggered by the user clicking Sync or by
-/// combat_log_auto_sync firing automatically right after capture).
-pub async fn sync_encounter_to_web(
+/// Posts one session chunk to the website and records the outcome in the
+/// sync log.
+async fn sync_chunk_to_web(
     app: &AppHandle,
     http: &reqwest::Client,
-    encounter: &crate::combat_log_session::EncounterReport,
+    chunk: &crate::combat_log_chunker::FinishedChunk,
 ) -> Result<(), String> {
-    let result = sync_encounter_to_web_inner(app, http, encounter).await;
+    let result = sync_chunk_to_web_inner(app, http, chunk).await;
 
     crate::sync_log::append_sync_log(
         app,
@@ -191,7 +187,7 @@ pub async fn sync_encounter_to_web(
             success: result.is_ok(),
             error: result.as_ref().err().cloned(),
             raid_id: None,
-            session_id: Some(encounter.session_id.clone()),
+            session_id: Some(chunk.session_id.clone()),
         },
     );
 
@@ -199,41 +195,54 @@ pub async fn sync_encounter_to_web(
         crate::debug_log::verbose(
             app,
             "sync_combat_session_to_web",
-            &format!("synced combat session {} to web", encounter.session_id),
+            &format!("synced combat log session {} to web", chunk.session_id),
         );
     }
     crate::debug_log::log_on_err(app, "sync_combat_session_to_web", result)
 }
 
-/// Sent as multipart (not plain JSON) so the raw log — the full "everything
-/// that happened" text (see CombatSession::raw_lines), easily megabytes for
-/// a long raid pull — can go alongside the summary as a compressed file part
-/// instead of bloating a JSON body. The summary itself still travels as one
-/// JSON-encoded "payload" field rather than flattened form fields, since
-/// players is a nested array the backend already validates as JSON.
-async fn sync_encounter_to_web_inner(
+/// What actually travels to the backend - just enough to identify and
+/// bound the raw log (see CombatLogSyncController's own doc comment for
+/// why the rest of the old payload - players/npcNames/contentType - isn't
+/// needed anymore: with a raw log attached, CombatLogImport's own
+/// PullSegmenter/CombatBreakdownService recompute all of that server-side
+/// from the raw text, which this chunk never tried to duplicate client-side
+/// in the first place - see combat_log_chunker's own module doc comment).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChunkSyncPayload {
+    session_id: String,
+    start_time_ms: i64,
+    end_time_ms: i64,
+}
+
+/// Sent as multipart (not plain JSON) so the raw log - easily megabytes for
+/// a 30-minute chunk - can go alongside the summary as a compressed file
+/// part instead of bloating a JSON body.
+async fn sync_chunk_to_web_inner(
     app: &AppHandle,
     http: &reqwest::Client,
-    encounter: &crate::combat_log_session::EncounterReport,
+    chunk: &crate::combat_log_chunker::FinishedChunk,
 ) -> Result<(), String> {
     let token = crate::keychain::get_token()
         .filter(|t| !t.is_empty())
         .ok_or_else(|| "sign in with Discord first".to_string())?;
 
-    // Looked up fresh here (rather than threaded through as a parameter)
-    // since both callers of sync_encounter_to_web (the manual sync command
-    // and the watcher's auto-sync path) already have an AppHandle to fetch
-    // it from, and only this function actually needs it.
     let raw_log = app
         .state::<AppState>()
         .combat_log_raw_logs
         .lock()
         .unwrap()
         .iter()
-        .find(|(session_id, _)| session_id == &encounter.session_id)
+        .find(|(session_id, _)| session_id == &chunk.session_id)
         .map(|(_, raw_log)| raw_log.clone());
 
-    let payload = serde_json::to_string(encounter).map_err(|e| e.to_string())?;
+    let payload = serde_json::to_string(&ChunkSyncPayload {
+        session_id: chunk.session_id.clone(),
+        start_time_ms: chunk.start_time_ms,
+        end_time_ms: chunk.end_time_ms,
+    })
+    .map_err(|e| e.to_string())?;
     let mut form = reqwest::multipart::Form::new().text("payload", payload);
 
     if let Some(raw_log) = raw_log.filter(|text| !text.is_empty()) {
@@ -275,23 +284,6 @@ fn gzip_text(text: &str) -> Result<Vec<u8>, String> {
         .write_all(text.as_bytes())
         .map_err(|e| e.to_string())?;
     encoder.finish().map_err(|e| e.to_string())
-}
-
-/// Whether new combat log sessions sync to the website automatically as
-/// soon as they're captured (see Settings::combat_log_auto_sync's doc
-/// comment and combat_log_watcher::maybe_auto_sync, which reads this
-/// setting right after a new encounter is stored).
-#[tauri::command]
-pub fn set_combat_log_auto_sync(app: AppHandle, enabled: bool) -> Result<Settings, String> {
-    let mut s = settings::load_settings(&app)?;
-    s.combat_log_auto_sync = enabled;
-    settings::save_settings(&app, &s)?;
-    crate::debug_log::verbose(
-        &app,
-        "set_combat_log_auto_sync",
-        &format!("set to {enabled}"),
-    );
-    Ok(s)
 }
 
 /// Forces the whole current combat log to be reprocessed as historical

@@ -1,11 +1,37 @@
-// Watches <game_path>/Logs/WoWCombatLog.txt, incrementally parsing/
-// aggregating its lines into encounters via combat_log_parser and
-// combat_log_session — mirrors watcher.rs's SavedVariables-watching
-// pattern (notify + a background thread) plus wowlogs/incremental_reader.py's
-// byte-offset resume-across-restarts approach. The very first time a given
-// log path is watched (no checkpoint yet), whatever's already in the file
-// is processed as historical backlog before live watching begins, not just
-// lines that arrive from here on — see load_offset/watch_combat_log.
+// Watches <game_path>/Logs/WoWCombatLog.txt, incrementally reading its
+// lines and grouping them into fixed-target-size, boundary-safe upload
+// chunks (see combat_log_chunker.rs) — mirrors watcher.rs's SavedVariables-
+// watching pattern (notify + a background thread) plus
+// wowlogs/incremental_reader.py's byte-offset resume-across-restarts
+// approach. The very first time a given log path is watched (no checkpoint
+// yet), whatever's already in the file is processed as historical backlog
+// before live watching begins, not just lines that arrive from here on —
+// see load_offset/watch_combat_log.
+//
+// Redesigned from a per-encounter (per boss pull) auto-sync model to this
+// current chunk-based, manual-sync-only one: the old SessionTracker/
+// CombatSession machinery (still in git history if ever needed again)
+// aggregated stats and inferred an encounter boundary CLIENT-SIDE from a
+// 15-second combat-activity gap, syncing each finished encounter to the
+// website individually (optionally automatically). That had two real
+// problems, both confirmed against actual production logs:
+//
+// - A pet/totem's SPELL_SUMMON line is very often written well BEFORE any
+//   boss pull begins (summoned during preparation, buffs, travel) - the old
+//   SessionTracker only ever buffered raw lines while an encounter was
+//   already open, so that summon was silently and permanently lost, and
+//   with it the only evidence of who owns that pet.
+// - Auto-syncing per finished encounter meant one HTTP request per pull, a
+//   whole raid night's worth, mostly happening automatically and easy to
+//   lose track of.
+//
+// Now the launcher's own job is much smaller: buffer EVERY raw line
+// unconditionally, and hand the website raw chunk text to fully
+// reprocess server-side (PullSegmenter re-derives pull boundaries,
+// CombatBreakdownService recomputes stats, PetOwnershipExtractor still
+// sees every SPELL_SUMMON since nothing was ever dropped client-side) -
+// see CombatLogImport::importPulls. Sync is manual only, same as Raids.
+//
 // Simplified from the wowlogs original in two ways:
 //
 // - No line-hash dedup set: unlike wowlogs (whose checkpoint carries a
@@ -13,7 +39,7 @@
 //   to an exact byte offset before reading is already fully deterministic
 //   — the same offset always reads the same next bytes, so there's nothing
 //   a hash set catches that offset-tracking doesn't already guarantee.
-// - Idle detection (SessionTracker::check_idle) uses real wall-clock time
+// - Idle detection (ChunkTracker::check_idle) uses real wall-clock time
 //   rather than wowlogs' approach of comparing real "now" against the
 //   log's own synthetic event timestamps — confirmed empirically that
 //   Python's strptime defaults a missing year to 1900, so that comparison
@@ -22,7 +48,7 @@
 //   against the actual running tool) its encounters likely never get the
 //   chance to accumulate a whole fight before being cut off.
 
-use crate::combat_log_session::{EncounterReport, SessionTracker};
+use crate::combat_log_chunker::{ChunkTracker, FinishedChunk, CHUNK_IDLE_TIMEOUT};
 use crate::commands::AppState;
 use notify::{RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
@@ -34,36 +60,19 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 
-/// No gap in combat activity longer than this ends the current encounter.
-pub const ENCOUNTER_TIMEOUT_MS: i64 = 15_000;
 const IDLE_CHECK_INTERVAL: Duration = Duration::from_secs(2);
-/// How many just-finished encounters the frontend can look back at without
+/// How many just-finished chunks the frontend can look back at without
 /// having missed the emitted event (e.g. it wasn't mounted yet).
-const MAX_RECENT_ENCOUNTERS: usize = 20;
+const MAX_RECENT_CHUNKS: usize = 20;
 
-/// (session_id, raw log text) pairs for recently finished encounters — kept
-/// separate from combat_log_recent (see EncounterReport's own npc_names doc
-/// comment for the related "keep raw facts out of the aggregated report"
-/// reasoning) so the frontend's Logs page and the combat-encounter-completed
-/// event never have to carry a potentially-multi-megabyte string just to
-/// show a summary row. Only ever read by sync_encounter_to_web.
+/// (session_id, raw log text) pairs for recently finished chunks — kept
+/// separate from combat_log_recent (see FinishedChunk's own doc comment for
+/// the related "keep raw facts out of what the frontend/event payload
+/// carries" reasoning) so the frontend's Logs page and the
+/// combat-log-session-completed event never have to carry a potentially-
+/// multi-megabyte string just to show a summary row. Only ever read by
+/// sync_chunk_to_web.
 pub type RawLogStore = Arc<Mutex<Vec<(String, String)>>>;
-/// Matches wowlogs' own MIN_COMBAT_DURATION_MS default — filters out a
-/// stray duel or a single tagged-then-abandoned mob, not real combat.
-const MIN_ENCOUNTER_DURATION_SEC: f64 = 5.0;
-
-/// Deliberately does NOT also require content_type to be Dungeon/Raid the
-/// way wowlogs' DUNGEON_RAID_ONLY=True default does — that heuristic
-/// needs a real 4+ person group just to score positively at all (see
-/// combat_log_zone::classify), so solo/small-group testing (or a 2-3
-/// person world escort, a duel, ...) always reads as World and would be
-/// silently discarded here before ever reaching the Logs view, with
-/// nothing to explain why. content_type is still computed and shown on
-/// each card - filtering what's worth syncing is left to the existing
-/// per-session Ignore button instead of an unreliable auto-guess.
-fn should_report(report: &EncounterReport) -> bool {
-    report.duration_sec >= MIN_ENCOUNTER_DURATION_SEC
-}
 
 pub fn combat_log_path(game_path: &Path) -> PathBuf {
     game_path.join("Logs").join("WoWCombatLog.txt")
@@ -169,8 +178,8 @@ fn read_new_lines(log_path: &Path, offset: u64) -> (Vec<String>, u64) {
 
 fn process_lines(
     app: &AppHandle,
-    tracker: &Arc<Mutex<SessionTracker>>,
-    recent: &Arc<Mutex<Vec<EncounterReport>>>,
+    tracker: &Arc<Mutex<ChunkTracker>>,
+    recent: &Arc<Mutex<Vec<FinishedChunk>>>,
     raw_logs: &RawLogStore,
     lines: Vec<String>,
 ) {
@@ -188,61 +197,35 @@ fn process_lines(
         }
     }
 
-    for (report, raw_log) in finished {
-        if should_report(&report) {
-            store_and_emit(app, recent, raw_logs, report, raw_log);
-        }
+    for (chunk, raw_log) in finished {
+        store_and_emit(app, recent, raw_logs, chunk, raw_log);
     }
 }
 
 fn store_and_emit(
     app: &AppHandle,
-    recent: &Arc<Mutex<Vec<EncounterReport>>>,
+    recent: &Arc<Mutex<Vec<FinishedChunk>>>,
     raw_logs: &RawLogStore,
-    report: EncounterReport,
+    chunk: FinishedChunk,
     raw_log: String,
 ) {
     {
         let mut recent = recent.lock().unwrap();
-        recent.push(report.clone());
-        if recent.len() > MAX_RECENT_ENCOUNTERS {
-            let overflow = recent.len() - MAX_RECENT_ENCOUNTERS;
+        recent.push(chunk.clone());
+        if recent.len() > MAX_RECENT_CHUNKS {
+            let overflow = recent.len() - MAX_RECENT_CHUNKS;
             recent.drain(0..overflow);
         }
     }
     {
         let mut raw_logs = raw_logs.lock().unwrap();
-        raw_logs.push((report.session_id.clone(), raw_log));
-        if raw_logs.len() > MAX_RECENT_ENCOUNTERS {
-            let overflow = raw_logs.len() - MAX_RECENT_ENCOUNTERS;
+        raw_logs.push((chunk.session_id.clone(), raw_log));
+        if raw_logs.len() > MAX_RECENT_CHUNKS {
+            let overflow = raw_logs.len() - MAX_RECENT_CHUNKS;
             raw_logs.drain(0..overflow);
         }
     }
-    let _ = app.emit("combat-encounter-completed", &report);
-
-    maybe_auto_sync(app, report);
-}
-
-/// Immediately syncs a freshly completed encounter to the website if the
-/// user has combat_log_auto_sync enabled, the same way WTF/roster auto-sync
-/// upload right after capturing something new instead of waiting for the
-/// user to open Logs and click Sync by hand. Fire-and-forget: a failure
-/// here (not signed in, offline, ...) still lands in the sync log via
-/// sync_encounter_to_web, same as a manual sync failing would, and the
-/// session stays available to retry by hand from the Logs page.
-fn maybe_auto_sync(app: &AppHandle, report: EncounterReport) {
-    let Ok(settings) = crate::settings::load_settings(app) else {
-        return;
-    };
-    if !settings.combat_log_auto_sync {
-        return;
-    }
-
-    let http = app.state::<AppState>().http.clone();
-    let app = app.clone();
-    tauri::async_runtime::spawn(async move {
-        let _ = crate::commands::sync_encounter_to_web(&app, &http, &report).await;
-    });
+    let _ = app.emit("combat-log-session-completed", &chunk);
 }
 
 /// Combat logging is off by default (`/combatlog` or Interface Options >
@@ -279,7 +262,7 @@ pub fn watch_combat_log(app: &AppHandle, game_path: &Path) {
         let mut guard = state.combat_log_watcher.lock().unwrap();
         *guard = None;
     }
-    *state.combat_log_tracker.lock().unwrap() = SessionTracker::new(ENCOUNTER_TIMEOUT_MS);
+    *state.combat_log_tracker.lock().unwrap() = ChunkTracker::new();
     state.combat_log_recent.lock().unwrap().clear();
     state.combat_log_raw_logs.lock().unwrap().clear();
 
@@ -318,10 +301,10 @@ pub fn watch_combat_log(app: &AppHandle, game_path: &Path) {
         // Catches up on whatever's already in the file before this watch
         // started (the very first time this log is watched, that's the
         // whole file - see load_offset) through the exact same
-        // parse/aggregate pipeline live updates use. Encounter boundaries
-        // still come out right even though these lines are all read in one
-        // burst just now: SessionTracker splits them by the GAPS BETWEEN
-        // THE LOG'S OWN TIMESTAMPS, not by how they arrived here.
+        // read/chunk pipeline live updates use. Chunk boundaries still come
+        // out right even though these lines are all read in one burst just
+        // now: ChunkTracker splits them by the GAPS BETWEEN THE LOG'S OWN
+        // TIMESTAMPS, not by how they arrived here.
         let (backlog_lines, offset) = read_new_lines(&log_path, start_offset);
         save_checkpoint(&app, &log_path, offset);
         if !backlog_lines.is_empty() {
@@ -388,14 +371,9 @@ pub fn watch_combat_log(app: &AppHandle, game_path: &Path) {
                 }
                 Ok(Err(_)) => continue,
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    let result = tracker
-                        .lock()
-                        .unwrap()
-                        .check_idle(Duration::from_millis(ENCOUNTER_TIMEOUT_MS as u64));
-                    if let Some((report, raw_log)) = result {
-                        if should_report(&report) {
-                            store_and_emit(&app, &recent, &raw_logs, report, raw_log);
-                        }
+                    let result = tracker.lock().unwrap().check_idle(CHUNK_IDLE_TIMEOUT);
+                    if let Some((chunk, raw_log)) = result {
+                        store_and_emit(&app, &recent, &raw_logs, chunk, raw_log);
                     }
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,

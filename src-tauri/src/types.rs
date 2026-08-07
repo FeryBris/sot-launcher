@@ -187,14 +187,6 @@ pub struct Settings {
     /// errors (which always log regardless of this).
     #[serde(default)]
     pub verbose_logging: bool,
-    /// When on, a captured combat log session (see combat_log_watcher.rs)
-    /// syncs to the website automatically as soon as it's captured, no
-    /// manual "Sync" click needed. Off by default, same as wtf_sync_auto_pull/
-    /// push - unlike those (safely reversible via Restore), there's no
-    /// window to "Ignore" a session before an instant auto-sync uploads it,
-    /// so this stays opt-in rather than opt-out.
-    #[serde(default)]
-    pub combat_log_auto_sync: bool,
 }
 
 fn default_true() -> bool {
@@ -588,7 +580,7 @@ pub struct SyncLogEntry {
     /// "raid" entries by this to mark a raid as already synced.
     #[serde(default)]
     pub raid_id: Option<String>,
-    /// Set only for kind "combat_session" — combat_log_session::EncounterReport's
+    /// Set only for kind "combat_session" — combat_log_chunker::FinishedChunk's
     /// session_id. get_captured_combat_sessions scans successful
     /// "combat_session" entries by this to mark one as already synced, same
     /// convention as raid_id above.
