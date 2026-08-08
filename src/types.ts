@@ -405,12 +405,13 @@ export interface SyncableRaid {
   isIgnored: boolean
 }
 
-/** One completed raw-log upload chunk (see combat_log_chunker.rs) — a
- *  fixed-target-size (~30 minutes), boundary-safe span of raw
- *  WoWCombatLog.txt lines, not one per boss pull the way this used to
- *  work. No player/boss/content-type summary is computed client-side
- *  anymore — PullSegmenter/CombatBreakdownService recompute all of that
- *  server-side from the raw text once this chunk is synced. */
+/** One completed raw-log upload chunk (see combat_log_chunker.rs) — one
+ *  whole play session's worth of raw WoWCombatLog.txt lines (closed only
+ *  by real wall-clock idle time, no size limit - an earlier version
+ *  targeted a fixed ~30 minutes instead), not one per boss pull the way
+ *  this used to work. No player/boss/content-type summary is computed
+ *  client-side anymore — PullSegmenter/CombatBreakdownService recompute
+ *  all of that server-side from the raw text once this chunk is synced. */
 export interface CombatLogSession {
   sessionId: string
   startTimeMs: number

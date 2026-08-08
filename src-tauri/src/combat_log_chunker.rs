@@ -1,5 +1,5 @@
-// Groups raw WoWCombatLog.txt lines into fixed-target-size, boundary-safe
-// "sessions" for manual upload — the launcher's half of the redesign that
+// Groups raw WoWCombatLog.txt lines into one whole-session, boundary-safe
+// upload per real play session — the launcher's half of the redesign that
 // replaced per-encounter auto-sync (see combat_log_watcher.rs's own module
 // doc comment for the rest of the story). Deliberately much simpler than
 // the SessionTracker/CombatSession/PlayerStats machinery this replaced:
@@ -17,39 +17,71 @@
 // well before any boss pull begins, and SessionTracker's own "no session
 // open yet" gap silently dropped that summon line, permanently losing the
 // only evidence of who owns that pet.
+//
+// No fixed-target size boundary anymore (an earlier version targeted ~30
+// minutes per chunk, closing at the next quiet moment past that target -
+// still in git history if ever needed again) - a real raid night's own
+// pulls/trash gaps never get split mid-night now, only a genuine
+// SESSION_GAP_MS-or-longer silence does (see its own doc comment for why
+// that's a much bigger threshold than the old inter-pull one). This was a
+// deliberate trade made once the backend side could support one whole
+// raid night as a single chunk: CombatLogSyncController now hands the
+// actual parse/segment/persist work to a queued job instead of running it
+// inline in the request (see that controller's own doc comment), and
+// RawLogParser was made meaningfully more memory-efficient (streamed line
+// reads + string interning - see its own doc comment) after benchmarking
+// confirmed a whole-raid-night-scale raw log (~190MB/1.3M lines) would
+// otherwise peak well over a gigabyte just to parse. The real trade this
+// makes: nothing is syncable mid-raid anymore (only once a real gap that
+// size is seen), and set_combat_session_ignored's own per-session ignore
+// granularity (see commands.rs, surfaced in Logs.vue) now applies to a
+// whole night at a time, not ~30 minutes of it - accepted as worth it for
+// one upload per raid night instead of ~10.
+//
+// The gap check still matters, not just check_idle's real-wall-clock one -
+// confirmed by a real bug this rewrite introduced and then had to fix:
+// reprocess_combat_log replays a WHOLE historical WoWCombatLog.txt (often
+// spanning many real, separate past play sessions across different days)
+// through record_line in one tight synchronous loop - essentially zero
+// real wall-clock time elapses between the FIRST and LAST line of that
+// replay, so check_idle alone would never fire DURING it, and the entire
+// backlog would sit open - and unsyncable - as one giant unclosed chunk
+// until 5 real minutes later. Using the log's OWN embedded timestamps
+// (not real elapsed processing time) for the big-gap check means backlog
+// replay closes chunks at the SAME real day-to-day boundaries a live
+// watch would have closed them at, regardless of how fast the replay
+// itself runs.
 
 use crate::combat_log_parser::parse_line_timestamp;
 use chrono::NaiveDate;
 use std::time::Instant;
 
-/// Target span of one uploadable session - not a hard cutoff (see
-/// should_close_for_size below), just how far a chunk tries to grow before
-/// looking for a quiet moment to actually close at.
-pub const CHUNK_TARGET_MS: i64 = 30 * 60 * 1000;
+/// A gap this big between two consecutive lines' own LOG timestamps means
+/// the player clearly stopped playing in between (logged off, closed WoW,
+/// or this is simply a different real day entirely in a replayed backlog -
+/// see this module's own doc comment) - not just a normal raid-night lull
+/// between pulls, trash, or a bio break, which real production logs
+/// confirmed can run several minutes without being a real session
+/// boundary. Deliberately the SAME magnitude as CHUNK_IDLE_TIMEOUT (five
+/// minutes) - they're the same real-world threshold measured on two
+/// different clocks (log time here, since this must also work correctly
+/// against a backlog replayed in a tight loop with no real time elapsing
+/// between lines; wall-clock time in CHUNK_IDLE_TIMEOUT, for the tail
+/// chunk of an actively-live-watched file that has no "next line" yet to
+/// compare against) - keep them in sync if either ever changes.
+pub const SESSION_GAP_MS: i64 = 5 * 60 * 1000;
 
-/// A chunk only ever closes for SIZE once at least this long has passed
-/// since the last buffered line - same reasoning as the backend's own
-/// PullSegmenter::QUIET_GAP_SEC (see that class' doc comment): closing
-/// mid-fight would split one real pull's raw events across two uploads,
-/// each showing PullSegmenter an INCOMPLETE view (an already-open pull with
-/// no death/wipe in one chunk, and a pull that looks like it started
-/// mid-fight - no starting damage/miss at all - in the next), silently
-/// under-reporting that pull's own stats once the two submissions merge
-/// (CombatLogImport merges by taking the MAX of each stat across
-/// submissions, not by stitching two partial raw logs into one longer one -
-/// two genuinely partial views of the same pull would each report less
-/// than the real total, and MAX of two under-counts is still an
-/// under-count).
-pub const CHUNK_QUIET_GAP_MS: i64 = 15_000;
-
-/// Closes the current chunk regardless of its size once this much REAL
-/// wall-clock time has passed with no new line at all - same
-/// last-processed-at wall-clock trick combat_log_watcher's SessionTracker
-/// predecessor used (see that module's own doc comment for why synthetic
-/// log timestamps can't be used for this instead). Makes sure a raid night
-/// that ends with less than 30 minutes of a chunk open still becomes
-/// syncable, instead of sitting open - and unsyncable - until WoW happens
-/// to write another line.
+/// Closes the current chunk once this much REAL wall-clock time has passed
+/// with no new line at all - see SESSION_GAP_MS's own doc comment for why
+/// this alone isn't enough (a replayed backlog needs the log-time gap
+/// check too) - same last-processed-at wall-clock trick combat_log_watcher's
+/// SessionTracker predecessor used (see that module's own doc comment for
+/// why synthetic log timestamps can't be used for THIS specific check
+/// instead: there's no "next line" yet for the current tail chunk of a
+/// live-watched file, so only real elapsed time can tell us the player
+/// stopped). Without this, a raid night's own chunk would sit open - and
+/// unsyncable - forever once the player logs off, since nothing else ever
+/// closes it.
 pub const CHUNK_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 
 /// One completed chunk's own metadata - the raw text itself travels
@@ -113,14 +145,15 @@ impl ChunkBuilder {
     }
 }
 
-fn should_close_for_size(chunk: &ChunkBuilder, incoming_line_ms: i64) -> bool {
-    incoming_line_ms - chunk.start_ms >= CHUNK_TARGET_MS
-        && incoming_line_ms - chunk.last_line_ms >= CHUNK_QUIET_GAP_MS
+fn should_close_for_gap(chunk: &ChunkBuilder, incoming_line_ms: i64) -> bool {
+    incoming_line_ms - chunk.last_line_ms >= SESSION_GAP_MS
 }
 
-/// Groups every raw combat log line into chunks - see this module's own
-/// doc comment for why buffering is unconditional and boundaries are
-/// quiet-gap-gated rather than a hard 30-minute cutoff.
+/// Groups every raw combat log line into one whole-session chunk per real
+/// play session - see this module's own doc comment for why buffering is
+/// unconditional and there's no fixed-target-size boundary anymore, only
+/// a genuine SESSION_GAP_MS-or-longer gap (record_line) or real wall-clock
+/// idle time (check_idle).
 pub struct ChunkTracker {
     current: Option<ChunkBuilder>,
     last_processed_at: Option<Instant>,
@@ -135,11 +168,12 @@ impl ChunkTracker {
     }
 
     /// Buffers one raw line, closing and returning the CURRENT chunk first
-    /// if this line's own timestamp lands at or past both the target size
-    /// and a quiet moment relative to the chunk's own last buffered line
-    /// (see should_close_for_size) - the closed chunk never includes this
-    /// line; it starts the next one instead, same "check before recording"
-    /// shape the old SessionTracker used for its own timeout check.
+    /// if this line's own log timestamp shows a real SESSION_GAP_MS-or-
+    /// longer silence since the chunk's last buffered line (see
+    /// should_close_for_gap/SESSION_GAP_MS's own doc comments) - the
+    /// closed chunk never includes this line; it starts the next one
+    /// instead, same "check before recording" shape the old SessionTracker
+    /// used for its own timeout check.
     pub fn record_line(
         &mut self,
         line: &str,
@@ -150,7 +184,7 @@ impl ChunkTracker {
 
         let mut finished = None;
         if let (Some(chunk), Some(t)) = (self.current.as_ref(), line_ms) {
-            if should_close_for_size(chunk, t) {
+            if should_close_for_gap(chunk, t) {
                 finished = self.current.take().map(ChunkBuilder::finalize);
             }
         }
@@ -169,10 +203,11 @@ impl ChunkTracker {
     }
 
     /// Same real-wall-clock idle detection the old SessionTracker used
-    /// (check_idle) - called periodically so a chunk under the 30-minute
-    /// target still closes promptly once the player's actually done for
-    /// the session, rather than sitting open (and unsyncable) until more
-    /// lines eventually arrive.
+    /// (check_idle) - called periodically so the current TAIL chunk (the
+    /// one still open because no NEXT line has arrived yet to trigger
+    /// record_line's own gap check against - see SESSION_GAP_MS's own doc
+    /// comment) closes promptly once the player's actually done for the
+    /// session, rather than sitting open (and unsyncable) forever.
     pub fn check_idle(&mut self, timeout: std::time::Duration) -> Option<(FinishedChunk, String)> {
         let idle = self
             .last_processed_at
@@ -220,21 +255,26 @@ mod tests {
     }
 
     #[test]
-    fn does_not_close_mid_pull_even_past_the_target_size() {
-        // Continuous combat (no gap ever exceeding CHUNK_QUIET_GAP_MS)
-        // spanning well past the 30-minute target must NOT get cut - see
-        // CHUNK_QUIET_GAP_MS's own doc comment for why a mid-pull cut is a
-        // real correctness bug, not just a cosmetic one.
+    fn a_whole_multi_hour_raid_night_with_only_normal_lulls_stays_one_chunk() {
+        // The real behavior change this module was rewritten for: real
+        // pulls/trash gaps (well under SESSION_GAP_MS, even a longer-than-
+        // usual bio break) must NOT split a raid night into several
+        // chunks the way the OLD ~30-minute target + 15s quiet gap used to
+        // - only a genuine SESSION_GAP_MS-or-longer silence (or real
+        // wall-clock idle, via check_idle) is allowed to close a chunk now.
         let mut tracker = ChunkTracker::new();
         let reference = today_reference();
 
         let mut t_ms = 0i64;
-        let step_ms = 10_000; // 10s apart - well under the 15s quiet gap
-        while t_ms < CHUNK_TARGET_MS + 5 * 60 * 1000 {
+        // 4 minutes apart - comfortably under SESSION_GAP_MS (5 min), well
+        // past the OLD 15s quiet gap.
+        let step_ms = 4 * 60 * 1000;
+        let five_hours_ms = 5 * 60 * 60 * 1000;
+        while t_ms < five_hours_ms {
             let secs = t_ms / 1000;
             let hms = format!(
                 "{:02}:{:02}:{:02}.000",
-                14 + secs / 3600,
+                (14 + secs / 3600) % 24,
                 (secs / 60) % 60,
                 secs % 60
             );
@@ -244,42 +284,65 @@ mod tests {
             );
             assert!(
                 tracker.record_line(&line, reference).is_none(),
-                "must not close mid-pull despite exceeding the target size"
+                "a normal raid-night lull under SESSION_GAP_MS must not close a chunk"
             );
             t_ms += step_ms;
         }
+
+        let (finished, _raw) = tracker
+            .check_idle(std::time::Duration::from_secs(0))
+            .expect("the whole 5-hour span should still be one open chunk, closeable by check_idle");
+        assert_eq!(finished.line_count, (five_hours_ms / step_ms) as usize);
     }
 
     #[test]
-    fn closes_once_both_the_size_target_and_a_quiet_moment_are_reached() {
+    fn a_replayed_backlog_spanning_two_real_days_splits_on_the_logs_own_gap_not_wall_clock() {
+        // The real regression this module hit and had to fix: reprocess_combat_log
+        // (see combat_log_watcher.rs) replays a whole historical file through
+        // record_line in one tight loop - real wall-clock time barely
+        // elapses between the two lines below despite them being a full day
+        // apart in LOG time, so check_idle alone would never split them.
+        // The gap check in record_line must use the LOG's own timestamps for
+        // exactly this reason.
         let mut tracker = ChunkTracker::new();
         let reference = today_reference();
 
-        let first = line_at(
+        let day_one = line_at(
             "14:00:00.000",
             r#"SWING_DAMAGE,0x0E1,"Alice",0x512,0xF1,"Boss",0xa48,100,0,1,0,0,0,nil,nil,nil"#,
         );
-        assert!(tracker.record_line(&first, reference).is_none());
+        assert!(tracker.record_line(&day_one, reference).is_none());
 
-        // 31 minutes later, with a real quiet gap since the last line -
-        // this line itself starts the NEXT chunk, closing the first.
-        let after_target = line_at(
-            "14:31:00.000",
+        // 6 hours later in log time - stands in for "a real different play
+        // session" (whether later the same day or, since parse_line_timestamp
+        // only ever tracks time-of-day, a real different calendar day
+        // entirely - either way the gap is unmistakably a session boundary,
+        // well past SESSION_GAP_MS).
+        let much_later = line_at(
+            "20:00:00.000",
             r#"SWING_DAMAGE,0x0E1,"Alice",0x512,0xF1,"Boss",0xa48,50,0,1,0,0,0,nil,nil,nil"#,
         );
         let (finished, raw) = tracker
-            .record_line(&after_target, reference)
-            .expect("size target + quiet gap should close the chunk");
+            .record_line(&much_later, reference)
+            .expect("a SESSION_GAP_MS-or-longer log-time gap should close the chunk");
         assert_eq!(finished.line_count, 1);
         assert!(raw.contains("100,0,1"));
         assert!(
             !raw.contains("50,0,1"),
             "the closing line belongs to the NEXT chunk, not this one"
         );
+
+        // The second chunk is still open, buffering the new line - confirm
+        // it's there and correctly closeable, not silently dropped.
+        let (second, raw2) = tracker
+            .check_idle(std::time::Duration::from_secs(0))
+            .expect("the second chunk should still be open and closeable");
+        assert_eq!(second.line_count, 1);
+        assert!(raw2.contains("50,0,1"));
     }
 
     #[test]
-    fn check_idle_closes_a_chunk_under_the_target_after_real_wall_clock_idle_time() {
+    fn check_idle_closes_a_chunk_after_real_wall_clock_idle_time() {
         let mut tracker = ChunkTracker::new();
         let reference = today_reference();
         let line = line_at(

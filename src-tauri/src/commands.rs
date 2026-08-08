@@ -216,9 +216,10 @@ struct ChunkSyncPayload {
     end_time_ms: i64,
 }
 
-/// Sent as multipart (not plain JSON) so the raw log - easily megabytes for
-/// a 30-minute chunk - can go alongside the summary as a compressed file
-/// part instead of bloating a JSON body.
+/// Sent as multipart (not plain JSON) so the raw log - easily tens of
+/// megabytes for a whole raid night's own chunk (see combat_log_chunker's
+/// own module doc comment) - can go alongside the summary as a compressed
+/// file part instead of bloating a JSON body.
 async fn sync_chunk_to_web_inner(
     app: &AppHandle,
     http: &reqwest::Client,
@@ -264,6 +265,14 @@ async fn sync_chunk_to_web_inner(
         .header("X-API-KEY", crate::config::API_KEY)
         .header("Accept", "application/json")
         .multipart(form)
+        // Overrides AppState.http's own 30s default (see its own doc
+        // comment: sized for the small JSON payloads every OTHER command
+        // using this shared client sends) for just this one request -
+        // this upload can now run to tens of megabytes for a whole raid
+        // night's own chunk (see combat_log_chunker's own module doc
+        // comment), which 30s is nowhere near generous enough for on a
+        // slower upload connection.
+        .timeout(std::time::Duration::from_secs(10 * 60))
         .send()
         .await
         .map_err(|e| e.to_string())?;

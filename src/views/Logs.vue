@@ -142,10 +142,11 @@ async function toggleIgnore(row: SessionRow) {
     <p class="hint">
       Captured automatically from WoWCombatLog.txt while you play — requires combat logging
       enabled in-game (<code>/combatlog</code>, or Interface Options &gt; Advanced Combat Logging).
-      Every ~30 minutes of activity becomes one session here, cut at a quiet moment rather than a
-      hard time limit so a pull is never split across two sessions. Nothing is analyzed
-      client-side any more — boss/pull identity, players, and stats are all resolved once a
-      session is synced to the website. Sync is manual, same as Raids.
+      One whole play session becomes one session here, closed once you've actually stopped
+      playing for a few minutes rather than at a fixed time limit, so a pull is never split
+      across two sessions. Nothing is analyzed client-side any more — boss/pull identity,
+      players, and stats are all resolved once a session is synced to the website. Sync is
+      manual, same as Raids.
     </p>
     <p v-if="reprocessError" class="empty error">{{ reprocessError }}</p>
 
