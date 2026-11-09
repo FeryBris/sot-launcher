@@ -189,6 +189,7 @@ async fn sync_chunk_to_web(
             error: result.as_ref().err().cloned(),
             raid_id: None,
             session_id: Some(chunk.session_id.clone()),
+            client: None,
         },
     );
 
@@ -762,6 +763,7 @@ pub async fn sync_guild_data_to_web(
             error: result.as_ref().err().cloned(),
             raid_id: None,
             session_id: None,
+            client: None,
         },
     );
     if result.is_ok() {
@@ -859,6 +861,7 @@ pub async fn sync_guild_roster_to_web(
             error: result.as_ref().err().cloned(),
             raid_id: None,
             session_id: None,
+            client: None,
         },
     );
     if result.is_ok() {
@@ -918,10 +921,15 @@ async fn sync_guild_roster_to_web_inner(
     Ok(())
 }
 
-/// Reads the recorded sync history (newest first) for Settings > Sync Logs.
+/// Reads the active game's recorded sync history (newest first) for
+/// Settings > Sync Logs.
 #[tauri::command]
 pub fn get_sync_log(app: AppHandle) -> Result<Vec<crate::types::SyncLogEntry>, String> {
-    crate::sync_log::load_sync_log(&app)
+    let client = settings::load_settings(&app)?.active_client;
+    Ok(crate::sync_log::load_sync_log(&app)?
+        .into_iter()
+        .filter(|e| e.client.unwrap_or(GameClient::Wotlk) == client)
+        .collect())
 }
 
 /// Reads the persistent error/warning log (newest first, debug.json in the
@@ -1059,6 +1067,7 @@ pub async fn sync_raid_to_web(
             error: result.as_ref().err().cloned(),
             raid_id: Some(raid_id.clone()),
             session_id: None,
+            client: None,
         },
     );
 

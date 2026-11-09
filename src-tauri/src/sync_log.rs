@@ -51,7 +51,8 @@ pub fn load_sync_log(app: &AppHandle) -> Result<Vec<SyncLogEntry>, String> {
 /// shrinks over time instead of just being filtered at read time forever).
 /// Errors reading/writing the log are swallowed on purpose — a logging
 /// failure must never surface as a sync failure to the caller.
-pub fn append_sync_log(app: &AppHandle, entry: SyncLogEntry) {
+pub fn append_sync_log(app: &AppHandle, mut entry: SyncLogEntry) {
+    entry.client = Some(crate::config::active_client());
     let Ok(path) = sync_log_path(app) else { return };
     let mut entries = load_sync_log(app).unwrap_or_default();
     entries.insert(0, entry);

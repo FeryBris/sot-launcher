@@ -695,6 +695,10 @@ pub struct SyncLogEntry {
     /// convention as raid_id above.
     #[serde(default)]
     pub session_id: Option<String>,
+    /// The game the attempt was for; set by sync_log::append_sync_log.
+    /// Missing on entries from before Forever support, which were WotLK.
+    #[serde(default)]
+    pub client: Option<GameClient>,
 }
 
 /// Parsed straight from the SoTCharacterSync addon's SavedVariables JSON blob.

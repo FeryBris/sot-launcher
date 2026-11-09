@@ -248,10 +248,7 @@ export async function switchClient(client: GameClient) {
   lastAutoRosterSyncedAt = 0
 
   await refreshManifest()
-  await refreshGuildSyncData()
-  void maybeAutoSyncGuildData()
-  await refreshGuildRoster()
-  void maybeAutoSyncGuildRoster()
+  void refreshAndAutoSyncGuild()
   void refreshMyLoot()
   void refreshWtfAccounts()
 }
@@ -294,8 +291,7 @@ export async function init() {
   discordPairedUnlisten = await api.onDiscordPaired((s) => {
     store.settings = s
     store.discordError = ''
-    void maybeAutoSyncGuildData()
-    void maybeAutoSyncGuildRoster()
+    void autoSyncGuild()
     void refreshMyLoot()
   })
   discordPairErrorUnlisten = await api.onDiscordPairError((message) => {
@@ -307,8 +303,7 @@ export async function init() {
   // changes — no need to poll on a timer for something that only ever
   // changes on real WoW-side events.
   guildDataChangedUnlisten = await api.onGuildDataChanged(() => {
-    void refreshGuildSyncData().then(() => maybeAutoSyncGuildData())
-    void refreshGuildRoster().then(() => maybeAutoSyncGuildRoster())
+    void refreshAndAutoSyncGuild()
   })
 
   // The game itself can only ever be running on one device at a time, so
@@ -323,10 +318,7 @@ export async function init() {
   })
 
   await refreshManifest()
-  await refreshGuildSyncData()
-  void maybeAutoSyncGuildData()
-  await refreshGuildRoster()
-  void maybeAutoSyncGuildRoster()
+  void refreshAndAutoSyncGuild()
   void refreshMyLoot()
   void refreshWtfAccounts()
 
@@ -432,6 +424,22 @@ export async function refreshGuildRoster() {
 
 let lastAutoRosterSyncAt = 0
 let lastAutoRosterSyncedAt = 0
+
+/** Characters before the roster, never both at once: the site accepts a
+ *  roster only from the guild master's account, and which account that is
+ *  comes from the character upload. On a fresh site (or a new sign-in) a
+ *  roster sent first is refused. */
+async function autoSyncGuild() {
+  await maybeAutoSyncGuildData()
+  await maybeAutoSyncGuildRoster()
+}
+
+/** Re-reads both addons' SavedVariables, then autoSyncGuild. */
+async function refreshAndAutoSyncGuild() {
+  await refreshGuildSyncData()
+  await refreshGuildRoster()
+  await autoSyncGuild()
+}
 
 /** Same debounced-auto-sync shape as maybeAutoSyncGuildData, but keyed off
  *  the roster snapshot's own `updatedAt` (a single timestamp for the whole
