@@ -5,6 +5,7 @@ import type {
   CombatLogSession,
   CombinedSyncResult,
   DebugLogEntry,
+  GameClient,
   GuildRosterData,
   GuildSyncData,
   InstalledState,
@@ -30,6 +31,17 @@ export function setGamePathWindows(path: string): Promise<Settings> {
 
 export function setGamePathLinux(path: string): Promise<Settings> {
   return invoke('set_game_path_linux', { path })
+}
+
+/** Switches the whole launcher to the other game - see Settings.activeClient. */
+export function setActiveClient(client: GameClient): Promise<Settings> {
+  return invoke('set_active_client', { client })
+}
+
+/** Which game a folder belongs to, and the folder that actually holds its
+ *  Wow.exe (null: no WoW executable found there or one level down). */
+export function detectGameClient(path: string): Promise<{ client: GameClient; folder: string } | null> {
+  return invoke('detect_game_client', { path })
 }
 
 /** The guild site's base URL — safe to expose (not a secret), baked in at

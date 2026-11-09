@@ -132,12 +132,7 @@ pub fn run() {
       // game folder is configured yet, this is a no-op — set_game_path_*
       // starts it once the player actually picks one.
       match settings::load_settings(app.handle()) {
-        Ok(s) => {
-          if let Some(path) = s.game_path() {
-            watcher::watch_guild_data(app.handle(), std::path::Path::new(&path));
-            combat_log_watcher::watch_combat_log(app.handle(), std::path::Path::new(&path));
-          }
-        }
+        Ok(s) => commands::restart_watchers(app.handle(), &s),
         Err(e) => debug_log::error(app.handle(), "startup_load_settings", &e),
       }
 
@@ -215,6 +210,8 @@ pub fn run() {
       commands::set_tray_primary_label,
       commands::set_game_path_windows,
       commands::set_game_path_linux,
+      commands::set_active_client,
+      commands::detect_game_client,
       commands::set_launch_command,
       commands::set_hide_on_launch,
       commands::set_close_to_tray,

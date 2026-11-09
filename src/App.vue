@@ -11,7 +11,16 @@ import SettingsView from './views/Settings.vue';
 import PlayBar from './components/PlayBar.vue';
 import ConfirmDialog from './components/ConfirmDialog.vue';
 import logo from './assets/logo.png';
-import { init as initStore, playNow, signInWithDiscord, store } from './store';
+import {
+  GAME_NAMES,
+  init as initStore,
+  playNow,
+  signInWithDiscord,
+  store,
+  supports,
+  switchClient,
+} from './store';
+import type { GameClient } from './types';
 import {
   isSelfUpdateSupported,
   logClientEvent,
@@ -117,16 +126,42 @@ watch(
   { immediate: true }
 );
 
-// The Raids tab (and its nav button) only render for officers — if that
-// stops being true mid-session (e.g. sign-out), fall back off a tab that
-// no longer has anything to show instead of leaving the content area blank.
+const GAMES: GameClient[] = ['wotlk', 'forever'];
+
+/** Which tabs exist for the active game (CLIENT_FEATURES in store.ts);
+ *  Raids additionally needs officer rank. */
+function tabVisible(t: Tab): boolean {
+  switch (t) {
+    case 'addons':
+      return supports('addons');
+    case 'logs':
+      return supports('combatLogs');
+    case 'raids':
+      return store.settings.isOfficer && supports('raids');
+    default:
+      return true;
+  }
+}
+
+// A tab can disappear mid-session (sign-out drops officer rank, switching
+// game drops unsupported tabs) - fall back to Home instead of leaving the
+// content area blank.
 watch(
-  () => store.settings.isOfficer,
-  (isOfficer) => {
-    if (!isOfficer && tab.value === 'raids') {
+  () => [store.settings.isOfficer, store.settings.activeClient],
+  () => {
+    if (!tabVisible(tab.value)) {
       tab.value = 'home';
     }
   }
+);
+
+// Each game has its own look (style.css: [data-client=...]).
+watch(
+  () => store.settings.activeClient,
+  (client) => {
+    document.documentElement.dataset.client = client;
+  },
+  { immediate: true }
 );
 
 onMounted(async () => {
@@ -171,18 +206,43 @@ onUnmounted(() => {
         <div class="version">v{{ appVersion }}</div>
       </div>
 
+      <div class="game-switch" role="tablist" aria-label="Game">
+        <button
+          v-for="game in GAMES"
+          :key="game"
+          class="game-switch-item"
+          :class="{ active: store.settings.activeClient === game }"
+          role="tab"
+          :aria-selected="store.settings.activeClient === game"
+          :disabled="store.syncing"
+          @click="switchClient(game)"
+        >
+          {{ GAME_NAMES[game] }}
+        </button>
+      </div>
+
       <nav class="nav">
         <button class="nav-item" :class="{ active: tab === 'home' }" @click="tab = 'home'">
           Home
         </button>
-        <button class="nav-item" :class="{ active: tab === 'addons' }" @click="tab = 'addons'">
+        <button
+          v-if="tabVisible('addons')"
+          class="nav-item"
+          :class="{ active: tab === 'addons' }"
+          @click="tab = 'addons'"
+        >
           Addons
         </button>
-        <button class="nav-item" :class="{ active: tab === 'logs' }" @click="tab = 'logs'">
+        <button
+          v-if="tabVisible('logs')"
+          class="nav-item"
+          :class="{ active: tab === 'logs' }"
+          @click="tab = 'logs'"
+        >
           Logs
         </button>
         <button
-          v-if="store.settings.isOfficer"
+          v-if="tabVisible('raids')"
           class="nav-item"
           :class="{ active: tab === 'raids' }"
           @click="tab = 'raids'"
@@ -242,9 +302,9 @@ onUnmounted(() => {
 
     <main class="content">
       <HomeView v-show="tab === 'home'" />
-      <AddonsView v-show="tab === 'addons'" />
-      <LogsView v-show="tab === 'logs'" />
-      <RaidsView v-if="store.settings.isOfficer" v-show="tab === 'raids'" />
+      <AddonsView v-if="tabVisible('addons')" v-show="tab === 'addons'" />
+      <LogsView v-if="tabVisible('logs')" v-show="tab === 'logs'" />
+      <RaidsView v-if="tabVisible('raids')" v-show="tab === 'raids'" />
       <SettingsView v-show="tab === 'settings'" />
     </main>
   </div>
@@ -292,6 +352,46 @@ onUnmounted(() => {
   font-weight: 600;
   font-size: 13px;
   letter-spacing: 0.02em;
+}
+
+/* WotLK | Forever - everything below follows the selected game. */
+.game-switch {
+  display: flex;
+  margin: 12px 8px 0;
+  padding: 3px;
+  gap: 3px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.game-switch-item {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  padding: 6px 8px;
+  border-radius: calc(var(--radius) - 2px);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  transition:
+    background 0.12s,
+    color 0.12s;
+}
+
+.game-switch-item:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.game-switch-item.active {
+  background: var(--bg-elevated);
+  color: var(--highlight);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.game-switch-item:disabled {
+  cursor: default;
 }
 
 .nav {

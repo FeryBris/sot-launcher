@@ -2,7 +2,10 @@
 import { computed, ref, watch } from 'vue';
 import { PhCloud } from '@phosphor-icons/vue';
 import {
+  GAME_NAMES,
+  confirmGameFolder,
   store,
+  supports,
   saveAutoLaunch,
   saveCloseToTray,
   saveHideOnLaunch,
@@ -45,11 +48,25 @@ watch(
   }
 );
 
+const gameName = computed(() => GAME_NAMES[store.settings.activeClient]);
+
 async function browseGameFolder() {
-  const path = await api.pickGameFolder();
-  if (path) {
-    await saveGamePath(path, platformTab.value);
+  let path = await api.pickGameFolder();
+  if (!path) return;
+  // Only checkable for this OS's own folder - a Linux path picked on
+  // Windows (or the reverse) can't be inspected from here.
+  const isThisOs = platformTab.value === (isWindows() ? 'windows' : 'linux');
+  if (isThisOs) {
+    const detected = await api.detectGameClient(path);
+    if (detected?.client !== store.settings.activeClient &&
+        !(await confirmGameFolder(path, detected?.client ?? null))) {
+      return;
+    }
+    // Save the folder that holds Wow.exe (e.g. _forever_ when its parent
+    // was picked) - addons install into that folder's Interface/AddOns.
+    if (detected) path = detected.folder;
   }
+  await saveGamePath(path, platformTab.value);
 }
 
 async function saveLaunchCmd() {
@@ -105,9 +122,10 @@ async function onWtfAutoPushChange(e: Event) {
     <h1>Settings</h1>
 
     <section class="field">
-      <label>World of Warcraft folder</label>
+      <label>{{ gameName }} game folder</label>
       <p class="hint">
-        Location to your WoW game folder — the one containing <code>Wow.exe</code>.
+        Location to your {{ gameName }} game folder — the one containing <code>Wow.exe</code>. Each
+        game has its own folder; switch games at the top of the sidebar.
       </p>
 
       <div class="platform-tabs">
@@ -132,7 +150,11 @@ async function onWtfAutoPushChange(e: Event) {
           <input class="path" type="text" readonly :value="currentTabGamePath ?? 'Not set'" />
           <button class="btn" @click="browseGameFolder">Browse...</button>
         </div>
-        <p v-if="platformTab === 'windows'" class="hint">
+        <p v-if="platformTab === 'windows' && store.settings.activeClient === 'forever'" class="hint">
+          The <code>_forever_</code> folder inside your Battle.net install, usually
+          <code>C:\Program Files (x86)\World of Warcraft\_forever_</code>.
+        </p>
+        <p v-else-if="platformTab === 'windows'" class="hint">
           Usually <code>C:\Program Files (x86)\World of Warcraft</code>.
         </p>
         <p v-else class="hint">
@@ -223,7 +245,7 @@ async function onWtfAutoPushChange(e: Event) {
       <p class="hint">Links your Discord identity so your WTF folder can sync across devices.</p>
     </section>
 
-    <section v-if="store.settings.discordSignedIn" class="field">
+    <section v-if="store.settings.discordSignedIn && supports('wtfSync')" class="field">
       <label>Settings Backup</label>
       <p class="hint">
         Backs up your account/character settings and every addon's saved data (keybinds, macros,
@@ -261,7 +283,7 @@ async function onWtfAutoPushChange(e: Event) {
       </p>
     </section>
 
-    <section class="field">
+    <section v-if="supports('characterSync')" class="field">
       <label>Sync</label>
       <div class="row">
         <button class="btn" @click="showSyncLogs = true">View Sync Logs</button>

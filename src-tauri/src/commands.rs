@@ -1,6 +1,6 @@
 use crate::settings;
 use crate::sync;
-use crate::types::{InstalledState, Manifest, Settings, SyncResult};
+use crate::types::{GameClient, InstalledState, Manifest, Settings, SyncResult};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
@@ -331,15 +331,77 @@ pub fn get_settings(app: AppHandle) -> Result<Settings, String> {
     settings::load_settings(&app)
 }
 
+/// Points the file watchers at the active game's folder. The combat log
+/// watcher only runs for WotLK: Forever's log format differs and the site has
+/// no Forever parser yet (docs/FOREVER_PLAN.md, Launcher), so for Forever it
+/// is stopped rather than left reading the wrong file.
+pub fn restart_watchers(app: &AppHandle, s: &Settings) {
+    match s.game_path() {
+        Some(path) => {
+            crate::watcher::watch_guild_data(app, Path::new(&path));
+            if s.active_client == GameClient::Wotlk {
+                crate::combat_log_watcher::watch_combat_log(app, Path::new(&path));
+            } else {
+                crate::combat_log_watcher::stop_combat_log_watch(app);
+            }
+        }
+        None => {
+            crate::watcher::stop_guild_watch(app);
+            crate::combat_log_watcher::stop_combat_log_watch(app);
+        }
+    }
+}
+
+/// Switches the whole launcher to `client` (see Settings::switch_client) and
+/// re-points the watchers at that game's folder.
+#[tauri::command]
+pub fn set_active_client(app: AppHandle, client: GameClient) -> Result<Settings, String> {
+    let mut s = settings::load_settings(&app)?;
+    s.switch_client(client);
+    settings::save_settings(&app, &s)?;
+    restart_watchers(&app, &s);
+    crate::debug_log::verbose(&app, "set_active_client", &format!("switched to {client:?}"));
+    Ok(s)
+}
+
+/// Which game a folder belongs to, so picking the wrong one can be caught.
+/// Blizzard's modern clients write `.flavor.info` next to the executable;
+/// Forever's contains `wowf` (measured 2026-11-09). WotLK 3.3.5 clients have
+/// no such file. The flavor file is read next to whichever executable
+/// find_wow_exe finds, since that also looks one folder down (a picked
+/// "World of Warcraft" folder holding `_forever_`). Returns None when there is
+/// no WoW executable at all.
+///
+/// `folder` is the directory that actually holds the executable - the one to
+/// save as the game folder, since addons install into its Interface/AddOns
+/// (picking the parent "World of Warcraft" folder would put them where the
+/// game never reads them).
+#[tauri::command]
+pub fn detect_game_client(path: String) -> Option<DetectedGame> {
+    let exe = find_wow_exe(Path::new(&path))?;
+    let dir = exe.parent()?;
+    let flavor = std::fs::read_to_string(dir.join(".flavor.info")).ok();
+    Some(DetectedGame {
+        client: match flavor {
+            Some(flavor) if flavor.contains("wowf") => GameClient::Forever,
+            _ => GameClient::Wotlk,
+        },
+        folder: dir.to_string_lossy().into_owned(),
+    })
+}
+
+#[derive(serde::Serialize)]
+pub struct DetectedGame {
+    pub client: GameClient,
+    pub folder: String,
+}
+
 #[tauri::command]
 pub fn set_game_path_windows(app: AppHandle, path: String) -> Result<Settings, String> {
     let mut s = settings::load_settings(&app)?;
     s.game_path_windows = Some(path.clone());
     settings::save_settings(&app, &s)?;
-    if let Some(current) = s.game_path() {
-        crate::watcher::watch_guild_data(&app, Path::new(&current));
-        crate::combat_log_watcher::watch_combat_log(&app, Path::new(&current));
-    }
+    restart_watchers(&app, &s);
     crate::debug_log::verbose(
         &app,
         "set_game_path_windows",
@@ -353,10 +415,7 @@ pub fn set_game_path_linux(app: AppHandle, path: String) -> Result<Settings, Str
     let mut s = settings::load_settings(&app)?;
     s.game_path_linux = Some(path.clone());
     settings::save_settings(&app, &s)?;
-    if let Some(current) = s.game_path() {
-        crate::watcher::watch_guild_data(&app, Path::new(&current));
-        crate::combat_log_watcher::watch_combat_log(&app, Path::new(&current));
-    }
+    restart_watchers(&app, &s);
     crate::debug_log::verbose(
         &app,
         "set_game_path_linux",
@@ -1708,4 +1767,78 @@ async fn wtf_pull_inner(
         &format!("pulled wtf account {account} from cloud (force={force})"),
     );
     Ok(s)
+}
+
+#[cfg(test)]
+mod detect_game_client_tests {
+    use super::*;
+
+    /// A throwaway folder tree under the OS temp dir, removed on drop.
+    struct TempTree(PathBuf);
+
+    impl TempTree {
+        fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!("sot-detect-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            TempTree(dir)
+        }
+
+        fn file(&self, relative: &str, contents: &str) {
+            let path = self.0.join(relative);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, contents).unwrap();
+        }
+
+        fn path(&self, relative: &str) -> String {
+            self.0.join(relative).to_string_lossy().into_owned()
+        }
+    }
+
+    impl Drop for TempTree {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Battle.net layout: World of Warcraft/_forever_/{Wow.exe, .flavor.info}
+    /// with "Product Flavor!STRING:0\nwowf" (measured 2026-11-09).
+    fn forever_install(name: &str) -> TempTree {
+        let tree = TempTree::new(name);
+        tree.file("_forever_/Wow.exe", "");
+        tree.file("_forever_/.flavor.info", "Product Flavor!STRING:0\nwowf\n");
+        tree
+    }
+
+    #[test]
+    fn the_forever_folder_is_detected_as_forever() {
+        let tree = forever_install("forever");
+        let found = detect_game_client(tree.path("_forever_")).unwrap();
+        assert_eq!(found.client, GameClient::Forever);
+        assert_eq!(found.folder, tree.path("_forever_"));
+    }
+
+    #[test]
+    fn picking_the_parent_folder_still_finds_forever_and_points_at_its_folder() {
+        let tree = forever_install("parent");
+        let found = detect_game_client(tree.path("")).unwrap();
+        assert_eq!(found.client, GameClient::Forever);
+        // Addons must go into _forever_/Interface/AddOns, not the parent's.
+        assert!(found.folder.ends_with("_forever_"));
+    }
+
+    #[test]
+    fn a_folder_without_a_flavor_file_is_wotlk() {
+        let tree = TempTree::new("wotlk");
+        tree.file("Wow.exe", "");
+        let found = detect_game_client(tree.path("")).unwrap();
+        assert_eq!(found.client, GameClient::Wotlk);
+    }
+
+    #[test]
+    fn a_folder_without_wow_exe_is_not_a_game_folder() {
+        let tree = TempTree::new("empty");
+        tree.file("readme.txt", "");
+        assert!(detect_game_client(tree.path("")).is_none());
+    }
 }

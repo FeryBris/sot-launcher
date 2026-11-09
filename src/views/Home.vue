@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { PhArrowSquareOut } from '@phosphor-icons/vue';
-import { store } from '../store';
+import { GAME_NAMES, store, supports } from '../store';
 import { openCharacterPage } from '../api';
 import type { GuildSyncData } from '../types';
 import MyLoot from '../components/MyLoot.vue';
@@ -124,7 +124,13 @@ function viewCharacterOnWeb(character: GuildSyncData) {
         <h2>My Characters</h2>
       </div>
 
-      <div v-if="!store.guildSyncData.length" class="empty">
+      <div v-if="!supports('characterSync')" class="empty">
+        Character sync for {{ GAME_NAMES[store.settings.activeClient] }} is coming in the next
+        launcher update. Until then you can already set the game folder in Settings and launch the
+        game with Play.
+      </div>
+
+      <div v-else-if="!store.guildSyncData.length" class="empty">
         No character data yet — log in as a Stalkers of Time member with the SoTCharacterSync addon
         installed.
       </div>
@@ -164,7 +170,7 @@ function viewCharacterOnWeb(character: GuildSyncData) {
       </template>
     </section>
 
-    <section class="loot">
+    <section v-if="supports('myLoot')" class="loot">
       <h2>My Loot</h2>
       <MyLoot />
     </section>

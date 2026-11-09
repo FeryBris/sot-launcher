@@ -3,6 +3,7 @@ import * as api from './api'
 import { isWindows } from './platform'
 import type {
   AddonEntry,
+  GameClient,
   GuildRosterData,
   GuildSyncData,
   InstalledState,
@@ -96,6 +97,8 @@ export const store = reactive<Store>({
     wtfSyncAutoPush: false,
     wtfAccountSync: {},
     verboseLogging: false,
+    activeClient: 'wotlk',
+    storedProfiles: {},
   },
   apiBaseUrl: '',
   manifest: null,
@@ -175,6 +178,7 @@ function guildSyncSnapshot(data: typeof store.guildSyncData): string {
  *  A failed attempt doesn't update the snapshot, so it's retried on the
  *  next poll once the debounce window passes. */
 async function maybeAutoSyncGuildData() {
+  if (!supports('characterSync')) return
   if (!store.settings.discordSignedIn) return
   if (store.guildSyncing) return
 
@@ -188,6 +192,66 @@ async function maybeAutoSyncGuildData() {
     lastAutoSyncSnapshot = snapshot
     store.guildLastSyncedAt = Date.now()
   }
+}
+
+/** What each game supports so far - the one place that decides which parts
+ *  of the launcher run for the active game (docs/FOREVER_PLAN.md, Launcher).
+ *  Forever gets each part as its step lands: addons (step 2), character and
+ *  roster sync + My Loot (step 3), WTF backups (step 4), combat logs and
+ *  raids once the site and addons support them. Until then those parts must
+ *  not run for Forever at all: the manifest is WotLK's addon list, and the
+ *  readers expect the WotLK addons' SavedVariables. */
+export const CLIENT_FEATURES = {
+  wotlk: { addons: true, characterSync: true, myLoot: true, wtfSync: true, combatLogs: true, raids: true },
+  forever: { addons: false, characterSync: false, myLoot: false, wtfSync: false, combatLogs: false, raids: false },
+} as const satisfies Record<GameClient, Record<string, boolean>>
+
+export type ClientFeature = keyof (typeof CLIENT_FEATURES)['wotlk']
+
+export const GAME_NAMES: Record<GameClient, string> = {
+  wotlk: 'WotLK',
+  forever: 'Forever',
+}
+
+export function supports(feature: ClientFeature): boolean {
+  return CLIENT_FEATURES[store.settings.activeClient][feature]
+}
+
+/** Switches the whole launcher to the other game: the Rust side swaps the
+ *  per-game settings and re-points its file watchers; everything read from
+ *  the old game's folder or site is dropped and re-read for the new one. */
+export async function switchClient(client: GameClient) {
+  if (client === store.settings.activeClient || store.syncing) return
+  store.settings = await api.setActiveClient(client)
+  store.addonEnabled = { ...store.settings.addonEnabled }
+
+  store.manifest = null
+  store.installed = null
+  store.installedError = ''
+  store.manifestError = ''
+  store.syncError = ''
+  store.guildSyncData = []
+  store.guildSyncError = ''
+  store.guildRoster = null
+  store.guildRosterReadError = ''
+  store.guildRosterSyncError = ''
+  store.myLoot = null
+  store.myLootError = ''
+  store.wtfAccounts = []
+  store.wtfAccountRows = []
+  store.wtfAccountsError = ''
+  store.wtfSyncError = ''
+  // Auto-sync bookkeeping belongs to the previous game's data.
+  lastAutoSyncSnapshot = ''
+  lastAutoRosterSyncedAt = 0
+
+  await refreshManifest()
+  await refreshGuildSyncData()
+  void maybeAutoSyncGuildData()
+  await refreshGuildRoster()
+  void maybeAutoSyncGuildRoster()
+  void refreshMyLoot()
+  void refreshWtfAccounts()
 }
 
 /** The game path for whichever OS this is actually running on — same
@@ -237,7 +301,7 @@ export async function init() {
   // opted in (see wtf_sync.rs::watch_for_game_close - only armed at all
   // when wtfSyncAutoPush is on).
   gameClosedUnlisten = await api.onGameClosed(() => {
-    if (store.settings.wtfSyncAutoPush) {
+    if (store.settings.wtfSyncAutoPush && supports('wtfSync')) {
       void autoSyncAllWtfAccounts('push')
     }
   })
@@ -282,7 +346,7 @@ async function autoSyncAllWtfAccounts(direction: 'push' | 'pull') {
  *  since raid loot only ever changes after a raid night; the "My Loot"
  *  tab can call this again to manually refresh. */
 export async function refreshMyLoot() {
-  if (!store.settings.discordSignedIn) {
+  if (!supports('myLoot') || !store.settings.discordSignedIn) {
     store.myLoot = null
     return
   }
@@ -299,7 +363,7 @@ export async function refreshMyLoot() {
 
 /** Re-reads the SoTCharacterSync addon's SavedVariables snapshot, if any. */
 export async function refreshGuildSyncData() {
-  if (!currentGamePath()) {
+  if (!supports('characterSync') || !currentGamePath()) {
     store.guildSyncData = []
     return
   }
@@ -330,7 +394,7 @@ async function syncGuildDataToWeb() {
 
 /** Re-reads the SoTGuildSync addon's SavedVariables snapshot, if any. */
 export async function refreshGuildRoster() {
-  if (!currentGamePath()) {
+  if (!supports('characterSync') || !currentGamePath()) {
     store.guildRoster = null
     store.guildRosterReadError = ''
     return
@@ -359,6 +423,7 @@ let lastAutoRosterSyncedAt = 0
  *  join — there's no per-member identity to track here, just "has the
  *  addon written a newer snapshot than what we last sent". */
 async function maybeAutoSyncGuildRoster() {
+  if (!supports('characterSync')) return
   if (!store.settings.discordSignedIn) return
   if (store.guildRosterSyncing) return
   if (!store.guildRoster || store.guildRoster.members.length === 0) return
@@ -408,7 +473,8 @@ export async function signOutDiscord() {
 
 /** Every WTF/Account/* subfolder available under the current game folder. */
 export async function refreshWtfAccounts() {
-  if (!currentGamePath()) {
+  // No accounts means auto push/pull (which loop over these) do nothing too.
+  if (!supports('wtfSync') || !currentGamePath()) {
     store.wtfAccounts = []
     store.wtfAccountsError = ''
     return
@@ -526,6 +592,23 @@ export function confirmWtfPush(account: string, reason: string): Promise<boolean
   })
 }
 
+/** Asks before saving a game folder that doesn't look like the active game's
+ *  (detectGameClient) - picking the Forever folder for WotLK would install
+ *  the wrong addons into it. */
+export function confirmGameFolder(path: string, detected: GameClient | null): Promise<boolean> {
+  const active = GAME_NAMES[store.settings.activeClient]
+  const message =
+    detected === null
+      ? `No Wow.exe was found in\n${path}\n\nPick the folder that contains Wow.exe.`
+      : `This looks like a ${GAME_NAMES[detected]} folder, but you are setting up ${active}:\n${path}`
+  return requestConfirm({
+    title: `${active} game folder`,
+    message: `${message}\n\nUse it anyway?`,
+    confirmLabel: 'Use Anyway',
+    danger: true,
+  })
+}
+
 /** One themed confirm dialog for a restore that would overwrite unsynced local changes. */
 export function confirmWtfPull(account: string, reason: string): Promise<boolean> {
   return requestConfirm({
@@ -570,6 +653,14 @@ export async function wtfPullWithConfirm(account: string) {
 }
 
 export async function refreshManifest() {
+  if (!supports('addons')) {
+    // Without a manifest, sync and Play's pre-launch sync do nothing - so
+    // WotLK's addon list can never be installed into another game's folder.
+    store.manifest = null
+    store.installed = null
+    store.manifestError = ''
+    return
+  }
   store.loadingManifest = true
   store.manifestError = ''
   try {

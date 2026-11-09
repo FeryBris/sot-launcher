@@ -6,6 +6,13 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::commands::AppState;
 
+/// Stops the current watch, if any - for a game that has no folder set.
+pub fn stop_guild_watch(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let mut guard = state.guild_watcher.lock().unwrap();
+    *guard = None;
+}
+
 /// (Re)starts watching `<game_path>/WTF/Account` for changes to either
 /// guild-sync addon's SavedVariables file, replacing (and thereby
 /// stopping) any previous watch. Called once at startup and again

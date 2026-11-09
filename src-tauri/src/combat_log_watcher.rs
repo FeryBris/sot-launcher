@@ -250,14 +250,12 @@ pub fn reprocess_combat_log(app: &AppHandle, game_path: &Path) {
     watch_combat_log(app, game_path);
 }
 
-/// (Re)starts watching `<game_path>/Logs/WoWCombatLog.txt`, replacing (and
-/// thereby stopping) any previous watch — same lifecycle as
-/// watcher::watch_guild_data, called once at startup and again whenever the
-/// configured game folder changes.
-pub fn watch_combat_log(app: &AppHandle, game_path: &Path) {
-    let log_path = combat_log_path(game_path);
+/// Stops any current watch and clears its captured state; returns the new
+/// epoch, which marks every thread from an earlier watch as superseded.
+/// Called on its own when the active game has no combat log support yet
+/// (Forever - its log format differs, see docs/FOREVER_PLAN.md).
+pub fn stop_combat_log_watch(app: &AppHandle) -> u64 {
     let state = app.state::<AppState>();
-
     {
         let mut guard = state.combat_log_watcher.lock().unwrap();
         *guard = None;
@@ -266,13 +264,24 @@ pub fn watch_combat_log(app: &AppHandle, game_path: &Path) {
     state.combat_log_recent.lock().unwrap().clear();
     state.combat_log_raw_logs.lock().unwrap().clear();
 
+    state
+        .combat_log_watch_epoch
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        + 1
+}
+
+/// (Re)starts watching `<game_path>/Logs/WoWCombatLog.txt`, replacing (and
+/// thereby stopping) any previous watch — same lifecycle as
+/// watcher::watch_guild_data, called once at startup and again whenever the
+/// configured game folder changes.
+pub fn watch_combat_log(app: &AppHandle, game_path: &Path) {
+    let log_path = combat_log_path(game_path);
+    let state = app.state::<AppState>();
+
     // Claims this call as the current one - a still-polling thread from an
     // earlier call (waiting on the file to be created) checks this and
     // exits rather than stacking up alongside this new one.
-    let epoch = state
-        .combat_log_watch_epoch
-        .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-        + 1;
+    let epoch = stop_combat_log_watch(app);
     let epoch_counter = state.combat_log_watch_epoch.clone();
 
     let app = app.clone();

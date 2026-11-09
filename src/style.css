@@ -11,6 +11,12 @@
   --danger: #d16060;
   --success: #5cbf7d;
   --radius: 8px;
+  /* Secondary highlight - the WotLK site's tertiary color. */
+  --highlight: #ff9203;
+  --bg-tint: rgba(14, 17, 22, 0.88);
+  --bg-tint-strong: rgba(14, 17, 22, 0.94);
+  --bg-image: url('./assets/background_arthas.webp');
+  --bg-position: top left;
 
   color-scheme: dark;
   font-family:
@@ -31,10 +37,28 @@ body,
   margin: 0;
 }
 
+/* Forever: the Forever site's own look (web/resources/styles/config.scss
+   and generic/_base.scss) - neutral black instead of blue-grey, the same
+   blue, gold highlights, and its Horde background. Set on <html> by App.vue
+   from Settings.activeClient. */
+:root[data-client='forever'] {
+  --bg: #131313;
+  --bg-elevated: #1a1a1a;
+  --bg-panel: #212121;
+  --border: #2f2f2f;
+  --text-dim: #a5a5a5;
+  --highlight: #ffcc00;
+  --success: #29e979;
+  --bg-tint: rgba(19, 19, 19, 0.82);
+  --bg-tint-strong: rgba(19, 19, 19, 0.92);
+  --bg-image: url('./assets/background_horde.webp');
+  --bg-position: top center;
+}
+
 body {
   background:
-    linear-gradient(180deg, rgba(14, 17, 22, 0.88), rgba(14, 17, 22, 0.94)),
-    url('./assets/background_arthas.webp') no-repeat top left fixed;
+    linear-gradient(180deg, var(--bg-tint), var(--bg-tint-strong)),
+    var(--bg-image) no-repeat var(--bg-position) fixed;
   background-size: cover;
   color: var(--text);
   font-size: 14px;

@@ -187,6 +187,44 @@ pub struct Settings {
     /// errors (which always log regardless of this).
     #[serde(default)]
     pub verbose_logging: bool,
+    /// Which game the launcher is showing. Everything above that belongs to
+    /// one game (game paths, launch command, addon choices, WTF sync state)
+    /// always holds the ACTIVE game's values; the other game's values sit in
+    /// `stored_profiles` until `switch_client` swaps them back. Keeping the
+    /// active game's values in the original fields means every existing
+    /// reader of `game_path()`, `addon_enabled`, ... works unchanged, and a
+    /// settings.json from before Forever support loads as the WotLK profile.
+    #[serde(default)]
+    pub active_client: GameClient,
+    #[serde(default)]
+    pub stored_profiles: std::collections::HashMap<GameClient, GameProfile>,
+}
+
+/// The game a profile belongs to - see `Settings::active_client`. Also the
+/// `client` value the website stores with every upload.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum GameClient {
+    #[default]
+    Wotlk,
+    Forever,
+}
+
+/// One game's own settings, for the game that is NOT currently active (the
+/// active one's live in `Settings` itself - see `Settings::active_client`).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GameProfile {
+    #[serde(default)]
+    pub game_path_windows: Option<String>,
+    #[serde(default)]
+    pub game_path_linux: Option<String>,
+    #[serde(default)]
+    pub launch_command: Option<String>,
+    #[serde(default)]
+    pub addon_enabled: std::collections::HashMap<String, bool>,
+    #[serde(default)]
+    pub wtf_account_sync: std::collections::HashMap<String, WtfAccountSyncState>,
 }
 
 fn default_true() -> bool {
@@ -194,6 +232,30 @@ fn default_true() -> bool {
 }
 
 impl Settings {
+    /// Makes `to` the active game: parks the current game's values in
+    /// `stored_profiles` and loads `to`'s (empty for a game never set up).
+    pub fn switch_client(&mut self, to: GameClient) {
+        if to == self.active_client {
+            return;
+        }
+        let current = GameProfile {
+            game_path_windows: self.game_path_windows.take(),
+            game_path_linux: self.game_path_linux.take(),
+            launch_command: self.launch_command.take(),
+            addon_enabled: std::mem::take(&mut self.addon_enabled),
+            wtf_account_sync: std::mem::take(&mut self.wtf_account_sync),
+        };
+        self.stored_profiles.insert(self.active_client, current);
+
+        let next = self.stored_profiles.remove(&to).unwrap_or_default();
+        self.game_path_windows = next.game_path_windows;
+        self.game_path_linux = next.game_path_linux;
+        self.launch_command = next.launch_command;
+        self.addon_enabled = next.addon_enabled;
+        self.wtf_account_sync = next.wtf_account_sync;
+        self.active_client = to;
+    }
+
     /// The game path for whichever OS this build is actually running on.
     /// The Settings UI can show/edit both platforms' paths (so switching
     /// tabs isn't confusingly showing the same value under both labels),
@@ -639,4 +701,76 @@ pub struct GuildSyncData {
     /// see that function's doc comment).
     #[serde(default)]
     pub account: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn wotlk_settings() -> Settings {
+        let mut addons = std::collections::HashMap::new();
+        addons.insert("SoTBookie".to_string(), false);
+        Settings {
+            game_path_windows: Some(r"C:\Games\Warmane".to_string()),
+            launch_command: Some("lutris rungame/wotlk".to_string()),
+            addon_enabled: addons,
+            hide_on_launch: true,
+            ..Settings::default()
+        }
+    }
+
+    #[test]
+    fn a_settings_file_from_before_forever_support_loads_as_the_wotlk_profile() {
+        let old = r#"{"gamePathWindows":"C:/Games/Warmane","hideOnLaunch":true}"#;
+        let s: Settings = serde_json::from_str(old).unwrap();
+        assert_eq!(s.active_client, GameClient::Wotlk);
+        assert_eq!(s.game_path_windows.as_deref(), Some("C:/Games/Warmane"));
+        assert!(s.stored_profiles.is_empty());
+    }
+
+    #[test]
+    fn switching_to_a_game_never_set_up_starts_it_empty_and_parks_the_other() {
+        let mut s = wotlk_settings();
+        s.switch_client(GameClient::Forever);
+
+        assert_eq!(s.active_client, GameClient::Forever);
+        assert_eq!(s.game_path(), None);
+        assert!(s.launch_command.is_none());
+        assert!(s.addon_enabled.is_empty());
+        // Shared settings are not per game.
+        assert!(s.hide_on_launch);
+        assert_eq!(
+            s.stored_profiles[&GameClient::Wotlk].game_path_windows.as_deref(),
+            Some(r"C:\Games\Warmane")
+        );
+    }
+
+    #[test]
+    fn switching_back_restores_each_game_exactly_and_survives_a_save() {
+        let mut s = wotlk_settings();
+        s.switch_client(GameClient::Forever);
+        s.game_path_windows = Some(r"C:\Games\WoW\_forever_".to_string());
+        s.addon_enabled.insert("SoTGuildSync".to_string(), true);
+
+        // Round-trip through settings.json between the two switches.
+        let mut s: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        s.switch_client(GameClient::Wotlk);
+
+        assert_eq!(s.game_path_windows.as_deref(), Some(r"C:\Games\Warmane"));
+        assert_eq!(s.launch_command.as_deref(), Some("lutris rungame/wotlk"));
+        assert_eq!(s.addon_enabled.get("SoTBookie"), Some(&false));
+        assert!(!s.addon_enabled.contains_key("SoTGuildSync"));
+
+        s.switch_client(GameClient::Forever);
+        assert_eq!(s.game_path_windows.as_deref(), Some(r"C:\Games\WoW\_forever_"));
+        assert_eq!(s.addon_enabled.get("SoTGuildSync"), Some(&true));
+    }
+
+    #[test]
+    fn switching_to_the_active_game_changes_nothing() {
+        let mut s = wotlk_settings();
+        s.switch_client(GameClient::Wotlk);
+        assert_eq!(s.game_path_windows.as_deref(), Some(r"C:\Games\Warmane"));
+        assert!(s.stored_profiles.is_empty());
+    }
 }

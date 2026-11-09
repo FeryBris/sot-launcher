@@ -56,6 +56,24 @@ export interface Settings {
   /** When on, debug.json records every action the launcher takes, not just
    *  errors — see Settings > Sync Logs' "Log everything" checkbox. */
   verboseLogging: boolean
+  /** The game the launcher is showing. The per-game fields above (game
+   *  paths, launch command, addonEnabled, wtfAccountSync) always hold THIS
+   *  game's values; the other game's sit in storedProfiles (Rust:
+   *  Settings::switch_client). */
+  activeClient: GameClient
+  storedProfiles: Partial<Record<GameClient, GameProfile>>
+}
+
+/** Also the `client` value the website stores with every upload. */
+export type GameClient = 'wotlk' | 'forever'
+
+/** The per-game settings of the game that is NOT active. */
+export interface GameProfile {
+  gamePathWindows: string | null
+  gamePathLinux: string | null
+  launchCommand: string | null
+  addonEnabled: Record<string, boolean>
+  wtfAccountSync: Record<string, WtfAccountSyncState>
 }
 
 /** Per-account WTF sync bookkeeping — see Settings.wtfAccountSync. */
