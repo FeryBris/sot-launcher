@@ -3,7 +3,7 @@ import { computed } from 'vue';
 import { PhArrowSquareOut } from '@phosphor-icons/vue';
 import { GAME_NAMES, store, supports } from '../store';
 import { openCharacterPage } from '../api';
-import type { GuildSyncData } from '../types';
+import type { SyncedCharacter } from '../types';
 import MyLoot from '../components/MyLoot.vue';
 
 // Same filenames the guild website uses for portraits (gender-race-class.webp,
@@ -61,7 +61,7 @@ const RACE_KEY: Record<string, string> = {
   BloodElf: 'blood_elf',
 };
 
-function portraitSrc(character: GuildSyncData): string {
+function portraitSrc(character: SyncedCharacter): string {
   const gender = (character.gender ?? 'Male').toLowerCase();
   const race = RACE_KEY[character.race] ?? character.race.toLowerCase();
   const cls = CLASS_KEY[character.class.toUpperCase()] ?? character.class.toLowerCase();
@@ -98,7 +98,7 @@ function classColor(rawClass: string): string {
 // (lower guildRankIndex = higher rank, matching WoW's own 0-based
 // convention where 0 is Guild Master). Characters with no rank yet known
 // sort after ones that do.
-const sortedCharacters = computed<GuildSyncData[]>(() => {
+const sortedCharacters = computed<SyncedCharacter[]>(() => {
   return [...store.guildSyncData].sort((a, b) => {
     if (a.level !== b.level) return b.level - a.level;
     const rankA = a.guildRankIndex ?? Infinity;
@@ -112,7 +112,7 @@ const sortedCharacters = computed<GuildSyncData[]>(() => {
 // be redundant clutter on every card.
 const showAccounts = computed(() => new Set(store.guildSyncData.map((c) => c.account)).size > 1);
 
-function viewCharacterOnWeb(character: GuildSyncData) {
+function viewCharacterOnWeb(character: SyncedCharacter) {
   void openCharacterPage(store.apiBaseUrl, character.name);
 }
 </script>

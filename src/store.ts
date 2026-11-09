@@ -5,7 +5,7 @@ import type {
   AddonEntry,
   GameClient,
   GuildRosterData,
-  GuildSyncData,
+  SyncedCharacter,
   InstalledState,
   Manifest,
   MyLootResponse,
@@ -43,7 +43,7 @@ interface Store {
   syncError: string
   discordError: string
   loaded: boolean
-  guildSyncData: GuildSyncData[]
+  guildSyncData: SyncedCharacter[]
   guildSyncing: boolean
   guildSyncError: string
   guildLastSyncedAt: number | null
@@ -197,14 +197,13 @@ async function maybeAutoSyncGuildData() {
 
 /** What each game supports so far - the one place that decides which parts
  *  of the launcher run for the active game (docs/FOREVER_PLAN.md, Launcher).
- *  Forever gets each part as its step lands: addons (step 2), character and
- *  roster sync + My Loot (step 3), WTF backups (step 4), combat logs and
- *  raids once the site and addons support them. Until then those parts must
- *  not run for Forever at all: the manifest is WotLK's addon list, and the
- *  readers expect the WotLK addons' SavedVariables. */
+ *  Forever has its own addon list (the manifest is fetched per game) and
+ *  character + roster sync (the Forever addons' own JSON). Still off for
+ *  Forever: My Loot (no Forever raid loot yet), WTF backups (not planned),
+ *  and combat logs and raids until the site and addons support them. */
 export const CLIENT_FEATURES = {
   wotlk: { addons: true, characterSync: true, myLoot: true, wtfSync: true, combatLogs: true, raids: true },
-  forever: { addons: false, characterSync: false, myLoot: false, wtfSync: false, combatLogs: false, raids: false },
+  forever: { addons: true, characterSync: true, myLoot: false, wtfSync: false, combatLogs: false, raids: false },
 } as const satisfies Record<GameClient, Record<string, boolean>>
 
 export type ClientFeature = keyof (typeof CLIENT_FEATURES)['wotlk']
@@ -225,6 +224,8 @@ export async function switchClient(client: GameClient) {
   if (client === store.settings.activeClient || store.syncing) return
   store.settings = await api.setActiveClient(client)
   store.addonEnabled = { ...store.settings.addonEnabled }
+  // Each game has its own guild site (Rust: config.rs).
+  store.apiBaseUrl = await api.getApiBaseUrl()
 
   store.manifest = null
   store.installed = null

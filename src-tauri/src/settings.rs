@@ -19,6 +19,7 @@ fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
 pub fn load_settings(app: &AppHandle) -> Result<Settings, String> {
     let path = settings_path(app)?;
     if !path.exists() {
+        crate::config::set_active_client(crate::types::GameClient::Wotlk);
         // Settings::default() alone gives these bools' plain false default
         // — override for brand-new installs; existing settings.json files
         // keep whatever the player already chose.
@@ -31,6 +32,8 @@ pub fn load_settings(app: &AppHandle) -> Result<Settings, String> {
     }
     let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let mut settings: Settings = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+    // Site, API key and Discord token follow the active game - see config.rs.
+    crate::config::set_active_client(settings.active_client);
 
     // One-time migration: older builds stored the Discord token in plain
     // text right in this file (a `discord_token` string field, since
@@ -38,7 +41,8 @@ pub fn load_settings(app: &AppHandle) -> Result<Settings, String> {
     // types.rs). Lift it into the OS keychain so it stops round-tripping
     // through settings.json on every save. Skipped if the keychain
     // already holds a token, so this can never clobber a fresher one.
-    if crate::keychain::get_token().is_none() {
+    // Those builds only knew WotLK, so the token is WotLK's.
+    if settings.active_client == crate::types::GameClient::Wotlk && crate::keychain::get_token().is_none() {
         if let Ok(legacy) = serde_json::from_str::<serde_json::Value>(&raw) {
             if let Some(token) = legacy
                 .get("discord_token")
@@ -57,6 +61,7 @@ pub fn load_settings(app: &AppHandle) -> Result<Settings, String> {
 }
 
 pub fn save_settings(app: &AppHandle, settings: &Settings) -> Result<(), String> {
+    crate::config::set_active_client(settings.active_client);
     let path = settings_path(app)?;
     let raw = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
     fs::write(&path, raw).map_err(|e| e.to_string())

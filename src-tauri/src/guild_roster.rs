@@ -42,6 +42,19 @@ pub struct GuildRosterData {
 /// `None` covers both "no game folder" and "nobody's run the addon yet" —
 /// neither is an error, just "no roster data available right now".
 pub fn read_guild_roster(game_path: &Path) -> Result<Option<GuildRosterData>, String> {
+    let Some(json) = read_guild_roster_json(game_path)? else {
+        return Ok(None);
+    };
+    let data: GuildRosterData =
+        serde_json::from_value(json).map_err(|e| format!("failed to parse guild roster data: {e}"))?;
+    Ok(Some(data))
+}
+
+/// The SoTGuildSync export exactly as the addon wrote it. The Forever
+/// upload sends it as-is: besides `members` it carries `client`, `ranks`,
+/// `permissionLabels`, the guild event log and the times they were read,
+/// which the website stores and GuildRosterData doesn't keep.
+pub fn read_guild_roster_json(game_path: &Path) -> Result<Option<serde_json::Value>, String> {
     let Some(path) = find_saved_variables_file(game_path, "SoTGuildSync.lua") else {
         return Ok(None);
     };
@@ -51,8 +64,7 @@ pub fn read_guild_roster(game_path: &Path) -> Result<Option<GuildRosterData>, St
         return Ok(None);
     };
 
-    let data: GuildRosterData = serde_json::from_str(&json)
-        .map_err(|e| format!("failed to parse guild roster data: {e}"))?;
-
-    Ok(Some(data))
+    serde_json::from_str(&json)
+        .map(Some)
+        .map_err(|e| format!("failed to parse guild roster data: {e}"))
 }

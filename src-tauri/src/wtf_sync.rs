@@ -392,7 +392,7 @@ pub fn watch_for_game_close(app: tauri::AppHandle) {
 const WTF_SYNC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
 
 pub async fn upload_wtf_zip(http: &reqwest::Client, token: &str, account: &str, zip_bytes: Vec<u8>) -> Result<WtfSyncStatus, String> {
-    let url = format!("{}/wtf-sync/upload", crate::config::API_BASE_URL.trim_end_matches('/'));
+    let url = format!("{}/wtf-sync/upload", crate::config::api_base_url());
     let part = reqwest::multipart::Part::bytes(zip_bytes)
         .file_name("wtf.zip")
         .mime_str("application/zip")
@@ -405,7 +405,7 @@ pub async fn upload_wtf_zip(http: &reqwest::Client, token: &str, account: &str, 
         .post(&url)
         .timeout(WTF_SYNC_TIMEOUT)
         .bearer_auth(token)
-        .header("X-API-KEY", crate::config::API_KEY)
+        .header("X-API-KEY", crate::config::api_key())
         .header("Accept", "application/json")
         .multipart(form)
         .send()
@@ -418,13 +418,13 @@ pub async fn upload_wtf_zip(http: &reqwest::Client, token: &str, account: &str, 
 }
 
 pub async fn download_wtf_zip(http: &reqwest::Client, token: &str, account: &str) -> Result<Vec<u8>, String> {
-    let url = format!("{}/wtf-sync/download", crate::config::API_BASE_URL.trim_end_matches('/'));
+    let url = format!("{}/wtf-sync/download", crate::config::api_base_url());
     let resp = http
         .get(&url)
         .query(&[("account", account)])
         .timeout(WTF_SYNC_TIMEOUT)
         .bearer_auth(token)
-        .header("X-API-KEY", crate::config::API_KEY)
+        .header("X-API-KEY", crate::config::api_key())
         .send()
         .await
         .map_err(|e| e.to_string())?;
@@ -438,12 +438,12 @@ pub async fn download_wtf_zip(http: &reqwest::Client, token: &str, account: &str
 }
 
 pub async fn fetch_wtf_status(http: &reqwest::Client, token: &str, account: &str) -> Result<WtfSyncStatus, String> {
-    let url = format!("{}/wtf-sync/status", crate::config::API_BASE_URL.trim_end_matches('/'));
+    let url = format!("{}/wtf-sync/status", crate::config::api_base_url());
     let resp = http
         .get(&url)
         .query(&[("account", account)])
         .bearer_auth(token)
-        .header("X-API-KEY", crate::config::API_KEY)
+        .header("X-API-KEY", crate::config::api_key())
         .header("Accept", "application/json")
         .send()
         .await
@@ -458,11 +458,11 @@ pub async fn fetch_wtf_status(http: &reqwest::Client, token: &str, account: &str
 /// WtfCloudAccountEntry's doc comment for why this exists alongside
 /// list_wtf_accounts (local folders) rather than just using that.
 pub async fn fetch_wtf_cloud_accounts(http: &reqwest::Client, token: &str) -> Result<Vec<WtfCloudAccountEntry>, String> {
-    let url = format!("{}/wtf-sync/accounts", crate::config::API_BASE_URL.trim_end_matches('/'));
+    let url = format!("{}/wtf-sync/accounts", crate::config::api_base_url());
     let resp = http
         .get(&url)
         .bearer_auth(token)
-        .header("X-API-KEY", crate::config::API_KEY)
+        .header("X-API-KEY", crate::config::api_key())
         .header("Accept", "application/json")
         .send()
         .await

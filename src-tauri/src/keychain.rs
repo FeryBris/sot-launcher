@@ -9,11 +9,21 @@
 //! function here degrades to "acts as if signed out" rather than
 //! panicking or failing the caller in that case.
 
-const SERVICE: &str = "gg.sotlauncher";
-const ACCOUNT: &str = "discord_token";
+//!
+//! Each game's site issues its own token (config.rs), so each has its own
+//! entry; WotLK keeps the original one.
 
+use crate::types::GameClient;
+
+const SERVICE: &str = "gg.sotlauncher";
+
+/// The active game's entry (config::active_client).
 fn entry() -> Option<keyring::Entry> {
-    keyring::Entry::new(SERVICE, ACCOUNT).ok()
+    let account = match crate::config::active_client() {
+        GameClient::Wotlk => "discord_token",
+        GameClient::Forever => "discord_token_forever",
+    };
+    keyring::Entry::new(SERVICE, account).ok()
 }
 
 pub fn get_token() -> Option<String> {

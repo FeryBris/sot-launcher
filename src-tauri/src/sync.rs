@@ -992,6 +992,7 @@ mod tests {
 
     fn test_manifest() -> Manifest {
         Manifest {
+            client: None,
             addons: vec![AddonEntry {
                 name: "AddonA".to_string(),
                 description: String::new(),

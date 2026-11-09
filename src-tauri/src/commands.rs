@@ -258,12 +258,12 @@ async fn sync_chunk_to_web_inner(
 
     let url = format!(
         "{}/combat-log/sync",
-        crate::config::API_BASE_URL.trim_end_matches('/')
+        crate::config::api_base_url()
     );
     let resp = http
         .post(&url)
         .bearer_auth(token)
-        .header("X-API-KEY", crate::config::API_KEY)
+        .header("X-API-KEY", crate::config::api_key())
         .header("Accept", "application/json")
         .multipart(form)
         // Overrides AppState.http's own 30s default (see its own doc
@@ -368,6 +368,9 @@ pub fn set_active_client(app: AppHandle, client: GameClient) -> Result<Settings,
     // when it is the game already active.
     s.client_chosen = true;
     settings::save_settings(&app, &s)?;
+    // Each game has its own sign-in; save_settings pointed the keychain at
+    // the new game's.
+    s.discord_signed_in = crate::keychain::get_token().is_some();
     restart_watchers(&app, &s);
     crate::debug_log::verbose(&app, "set_active_client", &format!("switched to {client:?}"));
     Ok(s)
@@ -438,7 +441,7 @@ pub fn set_game_path_linux(app: AppHandle, path: String) -> Result<Settings, Str
 /// API key itself never leaves the Rust side.
 #[tauri::command]
 pub fn get_api_base_url() -> &'static str {
-    crate::config::API_BASE_URL
+    crate::config::api_base_url()
 }
 
 /// Whether `downloadAndInstall()` can actually succeed here. Windows
@@ -536,7 +539,7 @@ pub async fn fetch_manifest(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Manifest, String> {
-    let result = fetch_manifest_inner(&state).await;
+    let result = fetch_manifest_inner(&app, &state).await;
     if let Ok(m) = &result {
         crate::debug_log::verbose(
             &app,
@@ -551,15 +554,20 @@ pub async fn fetch_manifest(
     crate::debug_log::log_on_err(&app, "fetch_manifest", result)
 }
 
-async fn fetch_manifest_inner(state: &State<'_, AppState>) -> Result<Manifest, String> {
+/// The active game's addon list: the website keeps one list per game, and
+/// without `client` it answers with WotLK's (what launchers from before
+/// Forever support expect).
+async fn fetch_manifest_inner(app: &AppHandle, state: &State<'_, AppState>) -> Result<Manifest, String> {
+    let client = settings::load_settings(app)?.active_client;
     let url = format!(
         "{}/manifest",
-        crate::config::API_BASE_URL.trim_end_matches('/')
+        crate::config::api_base_url()
     );
     let req = state
         .http
         .get(&url)
-        .header("X-API-KEY", crate::config::API_KEY)
+        .query(&[("client", client.as_str())])
+        .header("X-API-KEY", crate::config::api_key())
         .header("Accept", "application/json");
     let resp = req.send().await.map_err(|e| e.to_string())?;
     if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
@@ -572,10 +580,29 @@ async fn fetch_manifest_inner(state: &State<'_, AppState>) -> Result<Manifest, S
         return Err(format!("HTTP {} while fetching manifest", resp.status()));
     }
     let body = resp.text().await.map_err(|e| e.to_string())?;
-    serde_json::from_str::<Manifest>(&body).map_err(|e| {
+    let manifest = serde_json::from_str::<Manifest>(&body).map_err(|e| {
         let snippet: String = body.chars().take(300).collect();
         format!("couldn't parse manifest response ({e}). Server returned: {snippet}")
-    })
+    })?;
+    check_manifest_client(&manifest, client)?;
+    Ok(manifest)
+}
+
+/// A site from before per-game addon lists ignores `?client=` and answers
+/// with the WotLK list - which must never be installed into another game's
+/// folder. Only WotLK accepts a manifest that doesn't name its game.
+fn check_manifest_client(manifest: &Manifest, client: GameClient) -> Result<(), String> {
+    match manifest.client.as_deref() {
+        Some(c) if c == client.as_str() => Ok(()),
+        None if client == GameClient::Wotlk => Ok(()),
+        _ => Err(format!(
+            "the guild website has no {} addon list yet",
+            match client {
+                GameClient::Wotlk => "WotLK",
+                GameClient::Forever => "Forever",
+            }
+        )),
+    }
 }
 
 #[tauri::command]
@@ -687,12 +714,27 @@ pub fn restore_addon(
 /// account. Empty covers both "no game folder set" and "addon hasn't
 /// written anything yet", neither of which is an error state for the UI.
 #[tauri::command]
-pub fn get_guild_sync_data(app: AppHandle) -> Result<Vec<crate::types::GuildSyncData>, String> {
+pub fn get_guild_sync_data(app: AppHandle) -> Result<Vec<serde_json::Value>, String> {
     let s = settings::load_settings(&app)?;
     let Some(game_path) = s.game_path() else {
         return Ok(Vec::new());
     };
-    crate::guild_sync::read_guild_sync_data(Path::new(&game_path))
+    read_characters(s.active_client, Path::new(&game_path))
+}
+
+/// Every character the active game's SoTCharacterSync knows about, as JSON
+/// with `account` added. WotLK's goes through GuildSyncData (which also
+/// normalizes older entries); Forever's is the addon's own JSON, which the
+/// website takes as-is. The UI only reads the fields both share (name,
+/// class, race, gender, level, guildRank, updatedAt, account).
+fn read_characters(client: GameClient, game_path: &Path) -> Result<Vec<serde_json::Value>, String> {
+    match client {
+        GameClient::Forever => Ok(crate::guild_sync::read_forever_characters(game_path)),
+        GameClient::Wotlk => crate::guild_sync::read_guild_sync_data(game_path)?
+            .iter()
+            .map(|c| serde_json::to_value(c).map_err(|e| e.to_string()))
+            .collect(),
+    }
 }
 
 #[derive(serde::Serialize)]
@@ -744,34 +786,33 @@ async fn sync_guild_data_to_web_inner(
         .filter(|t| !t.is_empty())
         .ok_or_else(|| "sign in with Discord first".to_string())?;
 
-    let data = crate::guild_sync::read_guild_sync_data(Path::new(&game_path))?;
-    if data.is_empty() {
+    let mut characters = read_characters(s.active_client, Path::new(&game_path))?;
+    if characters.is_empty() {
         return Err(
             "no character data found yet — log in as a Stalkers of Time member first".to_string(),
         );
     }
 
     // `account` is a local-only field (which WTF/Account/<name> folder this
-    // character came from) - strip it before sending so the website's
-    // payload shape is unchanged by it.
-    let characters: Vec<serde_json::Value> = data
-        .iter()
-        .filter_map(|c| {
-            let mut v = serde_json::to_value(c).ok()?;
-            v.as_object_mut()?.remove("account");
-            Some(v)
-        })
-        .collect();
+    // character came from) - strip it before sending. Every upload names its
+    // game; the Forever addon already writes `client` itself.
+    for character in &mut characters {
+        if let Some(obj) = character.as_object_mut() {
+            obj.remove("account");
+            obj.entry("client")
+                .or_insert_with(|| serde_json::Value::String(s.active_client.as_str().to_string()));
+        }
+    }
 
     let url = format!(
         "{}/characters/sync",
-        crate::config::API_BASE_URL.trim_end_matches('/')
+        crate::config::api_base_url()
     );
     let req = state
         .http
         .post(&url)
         .bearer_auth(token)
-        .header("X-API-KEY", crate::config::API_KEY)
+        .header("X-API-KEY", crate::config::api_key())
         .header("Accept", "application/json")
         .json(&SyncCharactersPayload { characters });
 
@@ -798,11 +839,6 @@ pub fn get_guild_roster(
         return Ok(None);
     };
     crate::guild_roster::read_guild_roster(Path::new(&game_path))
-}
-
-#[derive(serde::Serialize)]
-struct SyncRosterPayload<'a> {
-    members: &'a [crate::guild_roster::GuildRosterMember],
 }
 
 /// Reads the same snapshot `get_guild_roster` does and POSTs the full
@@ -854,19 +890,26 @@ async fn sync_guild_roster_to_web_inner(
         return Err("guild roster is empty".to_string());
     }
 
+    // Forever: the addon's whole export (ranks, permissions, event log and
+    // the times they were read). WotLK: the members, as before, now naming
+    // the game.
+    let payload = match s.active_client {
+        GameClient::Forever => crate::guild_roster::read_guild_roster_json(Path::new(&game_path))?
+            .ok_or_else(|| "no guild roster data found yet — run SoTGuildSync first".to_string())?,
+        GameClient::Wotlk => serde_json::json!({ "members": data.members, "client": "wotlk" }),
+    };
+
     let url = format!(
         "{}/guild-roster/sync",
-        crate::config::API_BASE_URL.trim_end_matches('/')
+        crate::config::api_base_url()
     );
     let req = state
         .http
         .post(&url)
         .bearer_auth(token)
-        .header("X-API-KEY", crate::config::API_KEY)
+        .header("X-API-KEY", crate::config::api_key())
         .header("Accept", "application/json")
-        .json(&SyncRosterPayload {
-            members: &data.members,
-        });
+        .json(&payload);
 
     let resp = req.send().await.map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
@@ -1053,13 +1096,13 @@ async fn sync_raid_to_web_inner(
 
     let url = format!(
         "{}/raids/sync",
-        crate::config::API_BASE_URL.trim_end_matches('/')
+        crate::config::api_base_url()
     );
     let req = state
         .http
         .post(&url)
         .bearer_auth(token)
-        .header("X-API-KEY", crate::config::API_KEY)
+        .header("X-API-KEY", crate::config::api_key())
         .header("Accept", "application/json")
         .json(&SyncRaidPayload {
             raid_json: &raid.raid_json,
@@ -1100,13 +1143,13 @@ async fn get_my_loot_inner(
 
     let url = format!(
         "{}/my-loot",
-        crate::config::API_BASE_URL.trim_end_matches('/')
+        crate::config::api_base_url()
     );
     let req = state
         .http
         .get(&url)
         .bearer_auth(token)
-        .header("X-API-KEY", crate::config::API_KEY)
+        .header("X-API-KEY", crate::config::api_key())
         .header("Accept", "application/json");
 
     let resp = req.send().await.map_err(|e| e.to_string())?;
@@ -1142,7 +1185,7 @@ pub async fn exchange_pair_code(
     code: String,
 ) -> Result<Settings, String> {
     let mut s = settings::load_settings(app)?;
-    let url = format!("{}/pair", crate::config::API_BASE_URL.trim_end_matches('/'));
+    let url = format!("{}/pair", crate::config::api_base_url());
     let resp = http
         .post(&url)
         .header("Accept", "application/json")
@@ -1195,7 +1238,7 @@ pub async fn clear_discord_login(
     if let Some(token) = crate::keychain::get_token().filter(|t| !t.is_empty()) {
         let url = format!(
             "{}/unpair",
-            crate::config::API_BASE_URL.trim_end_matches('/')
+            crate::config::api_base_url()
         );
         let _ = state
             .http
@@ -1782,6 +1825,32 @@ async fn wtf_pull_inner(
         &format!("pulled wtf account {account} from cloud (force={force})"),
     );
     Ok(s)
+}
+
+#[cfg(test)]
+mod manifest_client_tests {
+    use super::*;
+
+    fn manifest(client: Option<&str>) -> Manifest {
+        Manifest {
+            client: client.map(str::to_string),
+            ..Manifest::default()
+        }
+    }
+
+    #[test]
+    fn forever_refuses_a_manifest_that_does_not_name_forever() {
+        assert!(check_manifest_client(&manifest(None), GameClient::Forever).is_err());
+        assert!(check_manifest_client(&manifest(Some("wotlk")), GameClient::Forever).is_err());
+        assert!(check_manifest_client(&manifest(Some("forever")), GameClient::Forever).is_ok());
+    }
+
+    #[test]
+    fn wotlk_still_accepts_a_site_from_before_per_game_lists() {
+        assert!(check_manifest_client(&manifest(None), GameClient::Wotlk).is_ok());
+        assert!(check_manifest_client(&manifest(Some("wotlk")), GameClient::Wotlk).is_ok());
+        assert!(check_manifest_client(&manifest(Some("forever")), GameClient::Wotlk).is_err());
+    }
 }
 
 #[cfg(test)]

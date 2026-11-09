@@ -106,9 +106,14 @@ pub struct NewsItem {
     pub date: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Manifest {
+    /// The game this list is for, as the website echoes `?client=` back.
+    /// Missing from sites that predate per-game lists - see
+    /// commands.rs fetch_manifest_inner.
+    #[serde(default)]
+    pub client: Option<String>,
     #[serde(default)]
     pub addons: Vec<AddonEntry>,
     #[serde(default)]
@@ -215,6 +220,16 @@ pub enum GameClient {
     Forever,
 }
 
+impl GameClient {
+    /// The serialized name - the website's `client` value.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            GameClient::Wotlk => "wotlk",
+            GameClient::Forever => "forever",
+        }
+    }
+}
+
 /// One game's own settings, for the game that is NOT currently active (the
 /// active one's live in `Settings` itself - see `Settings::active_client`).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -230,6 +245,14 @@ pub struct GameProfile {
     pub addon_enabled: std::collections::HashMap<String, bool>,
     #[serde(default)]
     pub wtf_account_sync: std::collections::HashMap<String, WtfAccountSyncState>,
+    /// Each game's site has its own Discord sign-in (keychain.rs), so who is
+    /// signed in is per game too.
+    #[serde(default)]
+    pub discord_username: Option<String>,
+    #[serde(default)]
+    pub discord_avatar: Option<String>,
+    #[serde(default)]
+    pub is_officer: bool,
 }
 
 fn default_true() -> bool {
@@ -249,6 +272,9 @@ impl Settings {
             launch_command: self.launch_command.take(),
             addon_enabled: std::mem::take(&mut self.addon_enabled),
             wtf_account_sync: std::mem::take(&mut self.wtf_account_sync),
+            discord_username: self.discord_username.take(),
+            discord_avatar: self.discord_avatar.take(),
+            is_officer: std::mem::take(&mut self.is_officer),
         };
         self.stored_profiles.insert(self.active_client, current);
 
@@ -258,6 +284,9 @@ impl Settings {
         self.launch_command = next.launch_command;
         self.addon_enabled = next.addon_enabled;
         self.wtf_account_sync = next.wtf_account_sync;
+        self.discord_username = next.discord_username;
+        self.discord_avatar = next.discord_avatar;
+        self.is_officer = next.is_officer;
         self.active_client = to;
     }
 
@@ -782,6 +811,19 @@ mod tests {
         s.switch_client(GameClient::Forever);
         assert_eq!(s.game_path_windows.as_deref(), Some(r"C:\Games\WoW\_forever_"));
         assert_eq!(s.addon_enabled.get("SoTGuildSync"), Some(&true));
+    }
+
+    #[test]
+    fn each_game_keeps_its_own_discord_identity() {
+        let mut s = wotlk_settings();
+        s.discord_username = Some("fery".to_string());
+        s.is_officer = true;
+        s.switch_client(GameClient::Forever);
+        assert!(s.discord_username.is_none());
+        assert!(!s.is_officer);
+        s.switch_client(GameClient::Wotlk);
+        assert_eq!(s.discord_username.as_deref(), Some("fery"));
+        assert!(s.is_officer);
     }
 
     #[test]

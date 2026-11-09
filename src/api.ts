@@ -7,7 +7,7 @@ import type {
   DebugLogEntry,
   GameClient,
   GuildRosterData,
-  GuildSyncData,
+  SyncedCharacter,
   InstalledState,
   LutrisGame,
   Manifest,
@@ -118,7 +118,7 @@ export function listLutrisGames(): Promise<LutrisGame[]> {
   return invoke('list_lutris_games')
 }
 
-export function getGuildSyncData(): Promise<GuildSyncData[]> {
+export function getGuildSyncData(): Promise<SyncedCharacter[]> {
   return invoke('get_guild_sync_data')
 }
 

@@ -25,6 +25,8 @@ export interface NewsItem {
 }
 
 export interface Manifest {
+  /** The game the list is for (missing from sites before per-game lists). */
+  client?: string | null
   addons: AddonEntry[]
   wtfFiles: WtfEntry[]
   news: NewsItem[]
@@ -445,6 +447,23 @@ export interface CombatLogSession {
 export interface SyncableCombatLogSession extends CombatLogSession {
   alreadySynced: boolean
   isIgnored: boolean
+}
+
+/** One character from the active game's SoTCharacterSync, as the UI uses
+ *  it. WotLK entries are full GuildSyncData; Forever entries are the addon's
+ *  own JSON (Rust: commands.rs read_characters) - only these fields are
+ *  common to both. */
+export interface SyncedCharacter {
+  name: string
+  class: string
+  race: string
+  gender: string | null
+  guildRank: string | null
+  guildRankIndex: number | null
+  level: number
+  updatedAt: number
+  /** Which WTF/Account/<name> folder this character came from. */
+  account: string
 }
 
 /** Parsed from the SoTCharacterSync addon's SavedVariables — used unchanged
