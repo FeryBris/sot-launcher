@@ -178,7 +178,9 @@ async function onWtfAutoPushChange(e: Event) {
             </button>
           </div>
           <p class="hint">
-            Leave empty to auto-detect and launch <code>Wow.exe</code> directly (via Wine). If you
+            Leave empty to auto-detect and launch <code>Wow.exe</code> directly (via Wine), or
+            through Steam when the game folder is inside a Steam/Proton prefix
+            (<code>steamapps/compatdata/…</code>, e.g. Battle.net added to Steam). If you
             play through Lutris, click "Detect Lutris games" below to pick yours instead of typing a
             command by hand. Bottles/CrossOver/custom Wine prefixes still need to be entered
             manually &mdash; <code>{game_path}</code> is replaced with the folder above.

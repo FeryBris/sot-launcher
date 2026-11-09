@@ -11,6 +11,7 @@ mod ignored_raids;
 mod keychain;
 mod raid_loot_sync;
 mod settings;
+mod steam_launch;
 mod sync;
 mod sync_log;
 mod types;
@@ -19,7 +20,8 @@ mod watcher;
 mod wtf_sync;
 
 use commands::AppState;
-use tauri::menu::{Menu, MenuItem};
+use types::GameClient;
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager};
 use tauri_plugin_deep_link::DeepLinkExt;
@@ -33,6 +35,25 @@ fn show_main_window(app: &tauri::AppHandle) {
     let _ = window.show();
     let _ = window.set_focus();
   }
+}
+
+/// A tray "Play <game>" click. A game with no folder set up yet can't
+/// launch, so the window opens on it instead of the click doing nothing.
+fn tray_play(app: &tauri::AppHandle, client: GameClient) {
+  let configured = settings::load_settings(app)
+    .ok()
+    .and_then(|s| s.game_path_for(client))
+    .is_some_and(|p| !p.trim().is_empty());
+  if !configured {
+    show_main_window(app);
+  }
+  let _ = app.emit("tray-play", TrayPlay { client, launch: configured });
+}
+
+#[derive(Clone, serde::Serialize)]
+struct TrayPlay {
+  client: GameClient,
+  launch: bool,
 }
 
 /// Pulls the `code` query param out of a `sot-launcher://pair?code=...`
@@ -152,26 +173,31 @@ pub fn run() {
         dispatch_pair_code(&handle, code);
       });
 
-      // Label mirrors the frontend's update-available state (see
-      // set_tray_primary_label) — click just emits an event and lets the
-      // frontend decide whether that means installUpdate() or playNow(),
-      // reusing its existing sync-then-launch/update logic rather than
-      // duplicating it here.
-      let play_i = MenuItem::with_id(app, "primary", "Play", true, None::<&str>)?;
+      // One Play item per game; a click emits an event and lets the
+      // frontend switch to that game and run its usual sync-then-launch
+      // (store.ts: playNow) rather than duplicating it here. "Update" is
+      // only in the menu while an update is available
+      // (set_tray_update_available).
+      let update_i = MenuItem::with_id(app, "update", "Update", true, None::<&str>)?;
+      let play_wotlk_i = MenuItem::with_id(app, "play:wotlk", "Play WotLK", true, None::<&str>)?;
+      let play_forever_i = MenuItem::with_id(app, "play:forever", "Play Forever", true, None::<&str>)?;
+      let separator = PredefinedMenuItem::separator(app)?;
       let show_i = MenuItem::with_id(app, "show", "Open", true, None::<&str>)?;
       let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-      let tray_menu = Menu::with_items(app, &[&play_i, &show_i, &quit_i])?;
+      let tray_menu = Menu::with_items(app, &[&play_wotlk_i, &play_forever_i, &separator, &show_i, &quit_i])?;
 
-      app.state::<AppState>().tray_primary_item.lock().unwrap().replace(play_i);
+      app.state::<AppState>().tray_menu.lock().unwrap().replace((tray_menu.clone(), update_i));
 
       TrayIconBuilder::new()
         .icon(app.default_window_icon().unwrap().clone())
         .menu(&tray_menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
-          "primary" => {
-            let _ = app.emit("tray-primary-clicked", ());
+          "update" => {
+            let _ = app.emit("tray-update-clicked", ());
           }
+          "play:wotlk" => tray_play(app, GameClient::Wotlk),
+          "play:forever" => tray_play(app, GameClient::Forever),
           "show" => show_main_window(app),
           "quit" => app.exit(0),
           _ => {}
@@ -207,7 +233,7 @@ pub fn run() {
       commands::get_settings,
       commands::get_api_base_url,
       commands::is_self_update_supported,
-      commands::set_tray_primary_label,
+      commands::set_tray_update_available,
       commands::set_game_path_windows,
       commands::set_game_path_linux,
       commands::set_active_client,

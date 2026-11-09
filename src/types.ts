@@ -62,6 +62,8 @@ export interface Settings {
    *  Settings::switch_client). */
   activeClient: GameClient
   storedProfiles: Partial<Record<GameClient, GameProfile>>
+  /** False until the player picks a game on the first-open picker. */
+  clientChosen: boolean
 }
 
 /** Also the `client` value the website stores with every upload. */

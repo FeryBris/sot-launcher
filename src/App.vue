@@ -10,10 +10,12 @@ import RaidsView from './views/Raids.vue';
 import SettingsView from './views/Settings.vue';
 import PlayBar from './components/PlayBar.vue';
 import ConfirmDialog from './components/ConfirmDialog.vue';
+import GamePicker from './components/GamePicker.vue';
 import logo from './assets/logo.png';
 import {
   GAME_NAMES,
   init as initStore,
+  playFromTray,
   playNow,
   signInWithDiscord,
   store,
@@ -24,9 +26,10 @@ import type { GameClient } from './types';
 import {
   isSelfUpdateSupported,
   logClientEvent,
-  onTrayPrimaryClicked,
+  onTrayPlay,
+  onTrayUpdateClicked,
   openLauncherDownloadPage,
-  setTrayPrimaryLabel,
+  setTrayUpdateAvailable,
 } from './api';
 
 type Tab = 'home' | 'addons' | 'logs' | 'raids' | 'settings';
@@ -115,13 +118,13 @@ async function installUpdate() {
   }
 }
 
-// Mirrors update-availability onto the native tray menu's first item —
+// Mirrors update-availability onto the native tray menu's "Update" item -
 // the tray itself has no idea whether an update exists, it just relays
 // whatever this side decides.
 watch(
   updateAvailable,
   (val) => {
-    void setTrayPrimaryLabel(val ? 'Update' : 'Play');
+    void setTrayUpdateAvailable(val !== null);
   },
   { immediate: true }
 );
@@ -170,15 +173,17 @@ onMounted(async () => {
   selfUpdateSupported.value = await isSelfUpdateSupported();
   checkUpdate();
 
-  await onTrayPrimaryClicked(() => {
+  await onTrayUpdateClicked(() => {
     if (updateAvailable.value) {
       installUpdate();
-    } else {
-      playNow();
     }
   });
+  await onTrayPlay(({ client, launch }) => {
+    void playFromTray(client, launch);
+  });
 
-  if (store.settings.autoLaunch) {
+  // Not before the first-open picker: which game to launch isn't known yet.
+  if (store.settings.autoLaunch && store.settings.clientChosen) {
     playNow();
   }
 
@@ -309,6 +314,7 @@ onUnmounted(() => {
     </main>
   </div>
   <PlayBar />
+  <GamePicker v-if="store.loaded && !store.settings.clientChosen" />
   <ConfirmDialog />
 </template>
 

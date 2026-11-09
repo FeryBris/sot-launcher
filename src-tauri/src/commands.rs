@@ -1,4 +1,5 @@
 use crate::settings;
+use crate::steam_launch;
 use crate::sync;
 use crate::types::{GameClient, InstalledState, Manifest, Settings, SyncResult};
 use std::path::{Path, PathBuf};
@@ -14,10 +15,10 @@ pub struct CombinedSyncResult {
 
 pub struct AppState {
     pub http: reqwest::Client,
-    /// The tray menu's first item ("Play"/"Update") — set once during
-    /// `.setup()` in lib.rs, mutated later via `set_tray_primary_label`
-    /// whenever the frontend's update-available state changes.
-    pub tray_primary_item: std::sync::Mutex<Option<tauri::menu::MenuItem<tauri::Wry>>>,
+    /// The tray menu and its "Update" item - set once during `.setup()` in
+    /// lib.rs. `set_tray_update_available` puts the item at the top of the
+    /// menu while an update is available and takes it out otherwise.
+    pub tray_menu: std::sync::Mutex<Option<(tauri::menu::Menu<tauri::Wry>, tauri::menu::MenuItem<tauri::Wry>)>>,
     /// The active SavedVariables watcher (see watcher.rs) — held here so
     /// `set_game_path_windows`/`set_game_path_linux` can replace it (which
     /// drops and stops the old one) when the watched folder changes.
@@ -67,7 +68,7 @@ impl Default for AppState {
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
                 .unwrap_or_default(),
-            tray_primary_item: std::sync::Mutex::new(None),
+            tray_menu: std::sync::Mutex::new(None),
             guild_watcher: std::sync::Mutex::new(None),
             game_close_watching: std::sync::atomic::AtomicBool::new(false),
             combat_log_watcher: std::sync::Mutex::new(None),
@@ -314,14 +315,19 @@ pub fn reprocess_combat_log(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Relabels the tray's first menu item ("Play" <-> "Update") — the
-/// frontend already knows whether an update is available (it does the
-/// actual update check), this just mirrors that onto the native tray menu.
+/// Shows or hides the tray's "Update" item - the frontend does the actual
+/// update check, this just mirrors its result onto the native tray menu.
 #[tauri::command]
-pub fn set_tray_primary_label(state: State<'_, AppState>, label: String) -> Result<(), String> {
-    let guard = state.tray_primary_item.lock().map_err(|e| e.to_string())?;
-    if let Some(item) = guard.as_ref() {
-        item.set_text(label).map_err(|e| e.to_string())?;
+pub fn set_tray_update_available(state: State<'_, AppState>, available: bool) -> Result<(), String> {
+    let guard = state.tray_menu.lock().map_err(|e| e.to_string())?;
+    let Some((menu, update_item)) = guard.as_ref() else {
+        return Ok(());
+    };
+    let shown = menu.get(update_item.id()).is_some();
+    if available && !shown {
+        menu.insert(update_item, 0).map_err(|e| e.to_string())?;
+    } else if !available && shown {
+        menu.remove(update_item).map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -358,6 +364,9 @@ pub fn restart_watchers(app: &AppHandle, s: &Settings) {
 pub fn set_active_client(app: AppHandle, client: GameClient) -> Result<Settings, String> {
     let mut s = settings::load_settings(&app)?;
     s.switch_client(client);
+    // Picking a game on the first-open picker comes through here too, even
+    // when it is the game already active.
+    s.client_chosen = true;
     settings::save_settings(&app, &s)?;
     restart_watchers(&app, &s);
     crate::debug_log::verbose(&app, "set_active_client", &format!("switched to {client:?}"));
@@ -1318,6 +1327,12 @@ fn launch_game_inner(app: &AppHandle) -> Result<(), String> {
     {
         let resolved = custom.replace("{game_path}", &game_path);
         run_shell_command(&resolved, &game_root)?;
+    } else if let Some(appid) =
+        steam_launch::compat_appid(&game_root).filter(|_| !cfg!(target_os = "windows"))
+    {
+        let code = find_wow_exe(&game_root)
+            .and_then(|exe| exe.parent().and_then(steam_launch::battlenet_launch_code));
+        steam_launch::launch(app, appid, code)?;
     } else {
         let exe_path = find_wow_exe(&game_root).ok_or_else(|| {
             format!(

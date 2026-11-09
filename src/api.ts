@@ -317,14 +317,21 @@ export function onGameClosed(handler: () => void): Promise<UnlistenFn> {
   return listen('game-closed', () => handler())
 }
 
-/** Relabels the tray menu's first item ("Play" <-> "Update"). */
-export function setTrayPrimaryLabel(label: string): Promise<void> {
-  return invoke('set_tray_primary_label', { label })
+/** Shows or hides the tray menu's "Update" item. */
+export function setTrayUpdateAvailable(available: boolean): Promise<void> {
+  return invoke('set_tray_update_available', { available })
 }
 
-/** Fired when the tray menu's first item is clicked — the frontend decides
- *  whether that means installUpdate() or playNow() based on its own
- *  update-available state. */
-export function onTrayPrimaryClicked(handler: () => void): Promise<UnlistenFn> {
-  return listen('tray-primary-clicked', () => handler())
+/** Fired when the tray menu's "Update" item is clicked. */
+export function onTrayUpdateClicked(handler: () => void): Promise<UnlistenFn> {
+  return listen('tray-update-clicked', () => handler())
+}
+
+/** Fired when a tray "Play <game>" item is clicked. `launch` is false when
+ *  that game has no folder set up yet - the window has been opened on it
+ *  instead (lib.rs: tray_play). */
+export function onTrayPlay(
+  handler: (play: { client: GameClient; launch: boolean }) => void
+): Promise<UnlistenFn> {
+  return listen<{ client: GameClient; launch: boolean }>('tray-play', (e) => handler(e.payload))
 }

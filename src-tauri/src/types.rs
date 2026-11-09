@@ -198,6 +198,11 @@ pub struct Settings {
     pub active_client: GameClient,
     #[serde(default)]
     pub stored_profiles: std::collections::HashMap<GameClient, GameProfile>,
+    /// False until the player has picked a game on the first-open picker
+    /// (App.vue: GamePicker). Any later switch keeps it true, and the game
+    /// last switched to is the one the launcher opens with.
+    #[serde(default)]
+    pub client_chosen: bool,
 }
 
 /// The game a profile belongs to - see `Settings::active_client`. Also the
@@ -265,6 +270,19 @@ impl Settings {
             self.game_path_windows.clone()
         } else {
             self.game_path_linux.clone()
+        }
+    }
+
+    /// `game_path()` for either game, whether or not it is the active one.
+    pub fn game_path_for(&self, client: GameClient) -> Option<String> {
+        if client == self.active_client {
+            return self.game_path();
+        }
+        let profile = self.stored_profiles.get(&client)?;
+        if cfg!(target_os = "windows") {
+            profile.game_path_windows.clone()
+        } else {
+            profile.game_path_linux.clone()
         }
     }
 }
@@ -772,5 +790,23 @@ mod tests {
         s.switch_client(GameClient::Wotlk);
         assert_eq!(s.game_path_windows.as_deref(), Some(r"C:\Games\Warmane"));
         assert!(s.stored_profiles.is_empty());
+    }
+
+    #[test]
+    fn game_path_for_finds_the_inactive_game_too() {
+        let mut s = wotlk_settings();
+        s.game_path_linux = Some("/games/warmane".to_string());
+        assert!(s.game_path_for(GameClient::Forever).is_none());
+        s.switch_client(GameClient::Forever);
+        s.game_path_linux = Some("/games/forever".to_string());
+        assert_eq!(s.game_path_for(GameClient::Forever).as_deref(), Some("/games/forever"));
+        assert_eq!(s.game_path_for(GameClient::Wotlk).as_deref(), Some("/games/warmane"));
+    }
+
+    #[test]
+    fn a_settings_file_without_a_chosen_game_shows_the_picker() {
+        let old = r#"{"gamePathWindows":"C:/Games/Warmane"}"#;
+        let s: Settings = serde_json::from_str(old).unwrap();
+        assert!(!s.client_chosen);
     }
 }

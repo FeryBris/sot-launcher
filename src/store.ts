@@ -99,6 +99,7 @@ export const store = reactive<Store>({
     verboseLogging: false,
     activeClient: 'wotlk',
     storedProfiles: {},
+    clientChosen: false,
   },
   apiBaseUrl: '',
   manifest: null,
@@ -252,6 +253,20 @@ export async function switchClient(client: GameClient) {
   void maybeAutoSyncGuildRoster()
   void refreshMyLoot()
   void refreshWtfAccounts()
+}
+
+/** The first-open picker's choice: the game the launcher opens with from
+ *  now on (the sidebar switcher changes it later). Picking the game that is
+ *  already active only records the choice. */
+export async function chooseClient(client: GameClient) {
+  // switchClient refuses mid-sync; the picker stays up until it can go through.
+  if (store.syncing) return
+  if (client !== store.settings.activeClient) {
+    await switchClient(client)
+  }
+  if (!store.settings.clientChosen) {
+    store.settings = await api.setActiveClient(client)
+  }
 }
 
 /** The game path for whichever OS this is actually running on — same
@@ -909,6 +924,17 @@ export async function playNow() {
     await api.launchGame()
   } catch (e) {
     store.syncError = String(e)
+  }
+}
+
+/** A tray "Play <game>" click: switch to that game if needed, then the same
+ *  sync-then-launch as the Play button. Picking a game here also answers the
+ *  first-open picker. */
+export async function playFromTray(client: GameClient, launch: boolean) {
+  if (store.syncing) return
+  await chooseClient(client)
+  if (launch) {
+    await playNow()
   }
 }
 
